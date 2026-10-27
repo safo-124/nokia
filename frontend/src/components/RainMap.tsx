@@ -195,6 +195,8 @@ export default function RainMap({
           url={TILES}
           attribution={ATTRIBUTION}
           className={dark ? "tiles-dark" : "tiles-light"}
+          // CORS requests, so the tile-cache service worker can store real (not opaque) responses
+          crossOrigin="anonymous"
         />
         {image && imageBounds && <ImageOverlay url={image} bounds={imageBounds} opacity={0.8} />}
 

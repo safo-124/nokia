@@ -29,6 +29,15 @@ python -m venv .venv
 cd frontend && npm install
 ```
 
+## Demo-day kit
+
+- **Data without the pipeline:** `python db/snapshot.py load` loads both datasets from `db/demo_snapshot.zip`
+  (committed, 15 MB) into your local PostgreSQL in a few seconds. After re-running the pipeline, refresh it with
+  `python db/snapshot.py save`. Only needs `psycopg`.
+- **Map without internet:** the app keeps a copy of every map tile it has shown (`frontend/public/tile-cache-sw.js`).
+  Rehearse once online on the demo laptop: play both datasets and zoom to the views you will show. Those tiles then
+  work offline. Tiles you never viewed stay blank; the rain map, links, alerts and phone don't need internet.
+
 ## Run it
 
 ```bash
