@@ -115,12 +115,27 @@ def score(grid, hotspots, motion=None):
     return _long(columns)
 
 
-def alerts(risk, hotspots):
+def eta_range(eta_min, speed_kmh, speed_sd_kmh):
+    """Time range for a warning from the uncertainty of the storm's speed.
+
+    Rain that is d km away arrives after d / speed, so a speed of s +/- sd gives
+    eta * s / (s + sd) to eta * s / (s - sd). Rounded outwards to 5 minutes.
+    None for a near-stationary storm, where arrival time doesn't come from motion.
+    """
+    if speed_kmh < 3:
+        return None, None
+    k = min(speed_sd_kmh / speed_kmh, 0.6)
+    low = max(1, int(5 * np.floor(eta_min / (1 + k) / 5)))
+    return low, int(5 * np.ceil(eta_min / (1 - k) / 5))
+
+
+def alerts(risk, hotspots, motion=None):
     """Alerts with SMS-style messages.
 
     "observed": a hotspot's level went up. "forecast": the nowcast expects a
     higher level within the hour than the hotspot has reached or been warned
-    about so far.
+    about so far. With `motion`, forecast alerts get a time range from the
+    Kalman filter's speed uncertainty.
     """
     names = hotspots.set_index("id").name
     has_forecast = "fc_level" in risk
@@ -133,6 +148,11 @@ def alerts(risk, hotspots):
             if has_forecast and RANK[row.fc_level] > max(observed, warned):
                 warned = RANK[row.fc_level]
                 eta = int(row.fc_eta_min)
+                low = high = None
+                if motion is not None:
+                    m = motion.loc[row.time]
+                    low, high = eta_range(eta, m.speed_kmh, m.speed_sd_kmh)
+                when = f"in {low}-{high} min" if low is not None else f"in about {eta} min"
                 result.append({
                     "time": row.time.isoformat(),
                     "hotspot_id": hotspot_id,
@@ -140,10 +160,12 @@ def alerts(risk, hotspots):
                     "kind": "forecast",
                     "level": row.fc_level,
                     "eta_min": eta,
+                    "eta_low_min": low,
+                    "eta_high_min": high,
                     "acc_1h": round(row.fc_acc_1h, 1),
                     "message": (
                         f"Signal-to-Rain WARNING: {row.fc_level.upper()} flood risk expected in {name} "
-                        f"in about {eta} min. About {row.fc_acc_1h:.0f} mm of rain forecast in the "
+                        f"{when}. About {row.fc_acc_1h:.0f} mm of rain forecast in the "
                         "next hour. Clear drains and stay away from low-lying roads."
                     ),
                 })
@@ -155,6 +177,8 @@ def alerts(risk, hotspots):
                     "kind": "observed",
                     "level": row.level,
                     "eta_min": None,
+                    "eta_low_min": None,
+                    "eta_high_min": None,
                     "acc_1h": round(row.acc_1h, 1),
                     "message": (
                         f"Signal-to-Rain: {row.level.upper()} flood risk in {name} now. "
@@ -178,12 +202,16 @@ def warning_performance(alert_list):
     df["time"] = pd.to_datetime(df.time)
     df["rank"] = df.level.map(RANK)
     observed, forecast = df[df.kind == "observed"], df[df.kind == "forecast"]
-    leads, false_alarms, misses = [], 0, 0
+    leads, eta_errors, in_range, false_alarms, misses = [], [], [], 0, 0
     for w in forecast.itertuples():
         reached = observed[(observed.hotspot_id == w.hotspot_id) & (observed["rank"] >= w.rank)
                            & (observed.time >= w.time)]
         if len(reached) and reached.time.min() - w.time <= HIT_WINDOW:
-            leads.append((reached.time.min() - w.time) / pd.Timedelta("1min"))
+            lead = (reached.time.min() - w.time) / pd.Timedelta("1min")
+            leads.append(lead)
+            eta_errors.append(abs(lead - w.eta_min))
+            if "eta_low_min" in df and pd.notna(w.eta_low_min):
+                in_range.append(w.eta_low_min <= lead <= w.eta_high_min)
         else:
             false_alarms += 1
     for o in observed.itertuples():
@@ -197,4 +225,8 @@ def warning_performance(alert_list):
         "missed": int(misses),
         "median_lead_min": float(np.median(leads)) if leads else None,
         "min_lead_min": float(np.min(leads)) if leads else None,
+        # How far the stated arrival time was from when the level was reached
+        "median_eta_error_min": float(np.median(eta_errors)) if eta_errors else None,
+        # Share of hits where the level was reached inside the stated time range
+        "eta_in_range": round(float(np.mean(in_range)), 2) if in_range else None,
     }

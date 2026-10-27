@@ -1,10 +1,21 @@
 """Nowcasting: move the current rainfall map along the storm's motion to see 0-60 min ahead.
 
 This is the simplest useful nowcast (Lagrangian persistence): rain keeps its
-shape and intensity and drifts with one motion vector for the whole map. The
-motion is the shift that best lines up the map with the map `LAG` minutes
-earlier. Real nowcasting systems (e.g. pysteps) use a motion field and let
-intensity grow and decay; this is the hackathon version of the same idea.
+shape and intensity and drifts with one motion vector for the whole map. Real
+nowcasting systems (e.g. pysteps) use a motion field and let intensity grow
+and decay; this is the hackathon version of the same idea.
+
+The motion comes in two steps:
+
+1. Every few minutes, measure the shift that best lines up the map with the
+   map `LAG_MIN` earlier (global Lucas-Kanade), with an error estimate: larger
+   along a long rain band (where sliding the band changes nothing) and when
+   the rain is at the edge of the network (a storm entering looks like it is
+   growing, not moving).
+2. A Kalman filter combines those measurements with the motion so far,
+   trusting each one according to its error. It uses only the past, so it
+   would work live, and it gives the uncertainty of the speed, which turns
+   into a time range on warnings.
 
 Grid convention: rows run south to north, columns west to east, so a motion
 of (dy, dx) cells per minute is (northward, eastward).
@@ -16,10 +27,17 @@ from scipy import ndimage
 
 KM_PER_DEG = 111.0
 LAG_MIN = 5           # compare the map with the map this many minutes earlier
-EVERY_MIN = 5         # estimate motion this often, hold in between
-SMOOTH_MIN = 30       # median over this window, so one bad match doesn't flip the arrow
+EVERY_MIN = 5         # measure motion this often
 MAX_SPEED_KMH = 90.0
-MIN_RAIN_FRACTION = 0.05  # need this share of cells above 1 mm/h to trust a match
+MIN_RAIN_FRACTION = 0.05  # need this share of cells above 1 mm/h to try a match
+EDGE_CELLS = 3            # rain this close to the edge of coverage counts as "at the edge"
+
+# Kalman filter settings, in km/h. Picked from a small sweep: on OpenMRG all
+# combinations scored within 0.01 CSI of each other; this one also held up best
+# on the synthetic storm, whose first matches are biased by the network layout.
+MEASUREMENT_SD_KMH = 4.0      # error of one match on a storm well inside the network
+DRIFT_SD_KMH_PER_MIN = 0.3    # how quickly a storm's real motion can change
+START_SD_KMH = 10.0           # before the first match: assume a slow storm, don't jump to the first reading
 
 
 def cell_km(grid):
@@ -31,18 +49,21 @@ def cell_km(grid):
 
 
 def _shift_between(a, b, iterations=8, smooth_cells=2.0, ridge=2e-2):
-    """(dy, dx) in cells that best moves field `a` onto field `b`.
+    """Shift (dy, dx) in cells that best moves field `a` onto field `b`, and its error shape.
 
     Global Lucas-Kanade: one translation for the whole map, from the image
     gradients, refined by warping `a` and solving again. Along a long rain
     band the gradients carry no information, and the small ridge term keeps
-    that component near zero instead of letting it wander, so a squall line
-    gets the motion across the line, which is the part that matters.
+    that component near zero instead of letting it wander.
+
+    The error shape is the inverse of the gradient matrix, scaled so an evenly
+    textured map gives the identity: it is stretched along a rain band.
+    Returns None when there is too little overlap to match.
     """
     valid = ~np.isnan(a) & ~np.isnan(b)
     valid = ndimage.binary_erosion(valid, iterations=3)  # stay clear of coverage edges
     if valid.sum() < 50:
-        return 0.0, 0.0
+        return None
     a = ndimage.gaussian_filter(np.nan_to_num(a), smooth_cells)
     b = ndimage.gaussian_filter(np.nan_to_num(b), smooth_cells)
 
@@ -53,42 +74,70 @@ def _shift_between(a, b, iterations=8, smooth_cells=2.0, ridge=2e-2):
         it = (b - warped)[valid]
         gy, gx = gy[valid], gx[valid]
         h = np.array([[gy @ gy, gy @ gx], [gy @ gx, gx @ gx]])
-        h += ridge * np.trace(h) * np.eye(2)
-        step = np.linalg.solve(h, -np.array([gy @ it, gx @ it]))
+        step = np.linalg.solve(h + ridge * np.trace(h) * np.eye(2), -np.array([gy @ it, gx @ it]))
         d += step
         if np.abs(step).max() < 0.01:
             break
-    return float(d[0]), float(d[1])
+    # Error shape from the undamped gradients, so a long band really is uncertain along itself
+    shape = np.linalg.inv(h + 1e-6 * np.trace(h) * np.eye(2)) * np.trace(h) / 2
+    return d, shape
+
+
+def _edge_share(field):
+    """Share of the rain (above 1 mm/h) lying within EDGE_CELLS of the edge of coverage."""
+    valid = ~np.isnan(field)
+    rain = valid & (np.nan_to_num(field) > 1)
+    if not rain.any():
+        return 1.0
+    inner = ndimage.binary_erosion(valid, iterations=EDGE_CELLS, border_value=0)
+    return float((rain & ~inner).sum() / rain.sum())
 
 
 def estimate_motion(grid):
-    """Storm motion per time step as a DataFrame: dy, dx [cells/min], speed_kmh, bearing_deg.
+    """Storm motion per time step as a DataFrame.
 
-    bearing_deg is the compass direction the rain is moving towards (0 = north,
-    90 = east). Steps without enough rain to match get the last good estimate.
+    Columns: dy, dx [cells/min], speed_kmh, bearing_deg (compass direction the
+    rain moves towards, 0 = north, 90 = east), speed_sd_kmh (one standard
+    deviation of the speed), and measured (whether a match was used at that step).
     """
     times = pd.DatetimeIndex(grid.time.values)
     step_min = (times[1] - times[0]) / pd.Timedelta("1min")
     lag = max(1, int(round(LAG_MIN / step_min)))
     every = max(1, int(round(EVERY_MIN / step_min)))
     km_y, km_x = cell_km(grid)
-    max_cells_per_min = MAX_SPEED_KMH / 60 / min(km_y, km_x)
+    to_kmh = np.array([km_y, km_x]) * 60 / (lag * step_min)  # cells per lag -> km/h
 
+    # Kalman filter on the velocity (north, east) in km/h, constant-velocity model
+    x = np.zeros(2)
+    p = np.eye(2) * START_SD_KMH**2
+    q = np.eye(2) * DRIFT_SD_KMH_PER_MIN**2 * step_min
     fields = grid.values
-    raw = pd.DataFrame(index=times, columns=["dy", "dx"], dtype=float)
-    for i in range(lag, len(times), every):
+    rows = []
+    for i in range(len(times)):
+        if i:
+            p = p + q
+        measured = False
         a, b = fields[i - lag], fields[i]
-        if min(np.nanmean(a > 1), np.nanmean(b > 1)) < MIN_RAIN_FRACTION:
-            continue
-        dy, dx = np.array(_shift_between(a, b)) / (lag * step_min)
-        if np.hypot(dy, dx) <= max_cells_per_min:  # faster than any storm: a bad match
-            raw.iloc[i] = [dy, dx]
-
-    motion = raw.rolling(f"{SMOOTH_MIN}min", min_periods=1).median().ffill().fillna(0.0)
-    vy, vx = motion.dy * km_y * 60, motion.dx * km_x * 60  # km/h north, east
-    motion["speed_kmh"] = np.hypot(vy, vx)
-    motion["bearing_deg"] = np.degrees(np.arctan2(vx, vy)) % 360
-    return motion
+        if i >= lag and (i - lag) % every == 0 and min(np.nanmean(a > 1), np.nanmean(b > 1)) >= MIN_RAIN_FRACTION:
+            match = _shift_between(a, b)
+            if match is not None:
+                d, shape = match
+                z = d * to_kmh
+                if np.hypot(*z) <= MAX_SPEED_KMH:  # faster than any storm: a bad match
+                    # A storm entering the network looks like it is growing rather than moving
+                    edge = _edge_share(b)
+                    r = MEASUREMENT_SD_KMH**2 * shape * (1 + (edge / 0.25) ** 2)
+                    gain = p @ np.linalg.inv(p + r)
+                    x = x + gain @ (z - x)
+                    p = (np.eye(2) - gain) @ p
+                    measured = True
+        speed = float(np.hypot(*x))
+        along = x / speed if speed > 0.5 else np.array([np.sqrt(0.5), np.sqrt(0.5)])
+        rows.append((x[0] / (km_y * 60), x[1] / (km_x * 60), speed,
+                     float(np.degrees(np.arctan2(x[1], x[0])) % 360),
+                     float(np.sqrt(along @ p @ along)), measured))
+    return pd.DataFrame(rows, index=times,
+                        columns=["dy", "dx", "speed_kmh", "bearing_deg", "speed_sd_kmh", "measured"])
 
 
 def shift_field(field, dy, dx):

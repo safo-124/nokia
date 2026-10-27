@@ -95,7 +95,7 @@ def main(argv=None):
         print(f"Scoring flood risk for {hotspots_path.name}")
         hotspots = flood.load_hotspots(hotspots_path)
         risk = flood.score(grid, hotspots, motion)
-        alert_list = flood.alerts(risk, hotspots)
+        alert_list = flood.alerts(risk, hotspots, motion)
         nowcast_meta["warnings"] = flood.warning_performance(alert_list)
         print(f"  {len(alert_list)} alerts; early warnings: {json.dumps(nowcast_meta['warnings'])}")
 

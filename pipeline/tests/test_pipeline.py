@@ -4,7 +4,7 @@ import numpy as np
 import psycopg
 import pytest
 
-from s2r import data, db, interpolate, nowcast, quality, rain, run, wetdry
+from s2r import data, db, flood, interpolate, nowcast, quality, rain, run, wetdry
 
 
 @pytest.fixture(scope="module")
@@ -43,6 +43,15 @@ def test_nowcast_tracks_the_synthetic_storm(synthetic):
 
     s = nowcast.skill(grid, motion, lead_min=30)
     assert s["csi"]["nowcast"] > s["csi"]["persistence"]
+
+    # The Kalman filter is unsure before the storm and confident once it has been tracked a while
+    assert motion.speed_sd_kmh.iloc[0] > 3 * core.speed_sd_kmh.max()
+
+
+def test_eta_range_widens_with_speed_uncertainty():
+    assert flood.eta_range(30, speed_kmh=12, speed_sd_kmh=2) == (25, 40)
+    assert flood.eta_range(30, speed_kmh=12, speed_sd_kmh=6)[1] > 40
+    assert flood.eta_range(30, speed_kmh=2, speed_sd_kmh=1) == (None, None)  # barely moving
 
 
 def test_quality_check_names_each_fault(synthetic):

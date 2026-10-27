@@ -1,4 +1,5 @@
 import { RISK } from "../colors";
+import { arrival } from "../sms";
 import type { Alert } from "../types";
 
 interface Props {
@@ -17,7 +18,9 @@ function AlertCard({ alert: a }: { alert: Alert }) {
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 font-medium">
           <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: RISK[a.level].color }} />
-          {forecast ? `Early warning · ${RISK[a.level].label} in ~${a.eta_min} min` : `${RISK[a.level].label} now`}
+          {forecast
+            ? `Early warning · ${RISK[a.level].label} in ${a.eta_low_min != null ? "" : "~"}${arrival(a).replace("-", "–")} min`
+            : `${RISK[a.level].label} now`}
           {" · "}
           {a.name}
         </span>

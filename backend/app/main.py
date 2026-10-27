@@ -163,7 +163,8 @@ def rainfall_grid(dataset: str, time: datetime | None = None, lead: int = Query(
     t = _step(dataset, time)
     row = query(
         """
-        SELECT g.rain_rate, g.motion_dy, g.motion_dx, g.speed_kmh, g.bearing_deg, d.grid_lat, d.grid_lon
+        SELECT g.rain_rate, g.motion_dy, g.motion_dx, g.speed_kmh, g.bearing_deg, g.speed_sd_kmh,
+               d.grid_lat, d.grid_lon
         FROM rain_grid g JOIN datasets d ON d.id = g.dataset
         WHERE g.dataset = %s AND g.time = %s
         """,
@@ -178,7 +179,8 @@ def rainfall_grid(dataset: str, time: datetime | None = None, lead: int = Query(
         "time": _iso(t),
         "lead_min": lead,
         "valid_time": _iso(t + timedelta(minutes=lead)),
-        "motion": {"speed_kmh": row["speed_kmh"], "bearing_deg": row["bearing_deg"]},
+        "motion": {"speed_kmh": row["speed_kmh"], "bearing_deg": row["bearing_deg"],
+                   "speed_sd_kmh": row["speed_sd_kmh"]},
         "lat": [round(v, 5) for v in lat],
         "lon": [round(v, 5) for v in lon],
         "rain_rate": [_nan_to_none(r) for r in frame.round(1)],
@@ -258,11 +260,13 @@ def flood_risk(dataset: str, time: datetime | None = None):
 def alerts(dataset: str, until: datetime | None = None):
     """Alerts issued up to `until` (all of them if omitted).
 
-    kind is "forecast" (early warning from the nowcast, with eta_min) or "observed".
+    kind is "forecast" (early warning from the nowcast, with eta_min and the
+    range eta_low_min to eta_high_min) or "observed".
     """
     rows = query(
         """
-        SELECT time, hotspot_id, name, kind, level, eta_min, acc_1h, message FROM alerts
+        SELECT time, hotspot_id, name, kind, level, eta_min, eta_low_min, eta_high_min, acc_1h, message
+        FROM alerts
         WHERE dataset = %(ds)s AND (%(until)s::timestamp IS NULL OR time <= %(until)s::timestamp)
         ORDER BY time, kind  -- 'forecast' before 'observed' at the same minute
         """,

@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS rain_grid (
     motion_dx    real NOT NULL DEFAULT 0,
     speed_kmh    real NOT NULL DEFAULT 0,
     bearing_deg  real NOT NULL DEFAULT 0,
+    speed_sd_kmh real,                          -- one standard deviation of the speed (Kalman filter)
     PRIMARY KEY (dataset, time)
 );
 
@@ -98,6 +99,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     kind        text NOT NULL DEFAULT 'observed' CHECK (kind IN ('observed', 'forecast')),
     level       text NOT NULL,
     eta_min     integer,                        -- forecast alerts: minutes until the level is expected
+    eta_low_min  integer,                       -- and the range from the storm speed's uncertainty
+    eta_high_min integer,
     acc_1h      real NOT NULL,                  -- observed: last hour; forecast: next hour
     message     text NOT NULL
 );
@@ -115,3 +118,6 @@ ALTER TABLE flood_risk ADD COLUMN IF NOT EXISTS fc_eta_min integer;
 ALTER TABLE flood_risk ADD COLUMN IF NOT EXISTS fc_acc_1h real;
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'observed';
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS eta_min integer;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS eta_low_min integer;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS eta_high_min integer;
+ALTER TABLE rain_grid ADD COLUMN IF NOT EXISTS speed_sd_kmh real;

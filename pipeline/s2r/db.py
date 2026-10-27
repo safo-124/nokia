@@ -102,6 +102,7 @@ def save(conn, dataset, *, meta, cmls, link_quality, r_link, wet_link, gauges, g
                 "motion_dx": motion.dx.values.round(4),
                 "speed_kmh": motion.speed_kmh.values.round(1),
                 "bearing_deg": motion.bearing_deg.values.round(0),
+                "speed_sd_kmh": motion.speed_sd_kmh.values.round(1),
             }
         ))
 
@@ -132,6 +133,7 @@ def save(conn, dataset, *, meta, cmls, link_quality, r_link, wet_link, gauges, g
             if alert_list:
                 alerts = pd.DataFrame(alert_list).assign(dataset=dataset)
                 alerts["time"] = pd.to_datetime(alerts.time)
-                alerts["eta_min"] = alerts.eta_min.astype("Int64")
+                for col in ("eta_min", "eta_low_min", "eta_high_min"):
+                    alerts[col] = alerts[col].astype("Int64")
                 _copy(conn, "alerts", alerts[["dataset", "time", "hotspot_id", "name", "kind", "level",
-                                              "eta_min", "acc_1h", "message"]])
+                                              "eta_min", "eta_low_min", "eta_high_min", "acc_1h", "message"]])

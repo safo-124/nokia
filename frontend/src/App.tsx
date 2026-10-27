@@ -45,6 +45,22 @@ function NowcastScores({ nowcast }: { nowcast: Meta["nowcast"] }) {
           reached. {w.false_alarms} false alarms, {w.missed} missed.
         </p>
       )}
+      {w?.median_eta_error_min != null && (
+        <p>
+          Stated arrival time off by a median of <span className="tabular">{w.median_eta_error_min} min</span>
+          {w.eta_in_range != null && (
+            <>
+              ; the level was reached inside the stated time range in{" "}
+              <span className="tabular">{Math.round(w.eta_in_range * 100)}%</span> of cases
+            </>
+          )}
+          .
+        </p>
+      )}
+      <p className="text-xs text-[var(--muted)]">
+        Storm motion is tracked with a Kalman filter, which also gives the ± on the speed and the time ranges on
+        warnings.
+      </p>
       <table className="tabular w-full">
         <caption className="mb-1 text-left text-xs text-[var(--muted)]">
           Rain above {nowcast.skill[0]?.threshold_mm_h} mm/h hit where forecast (CSI, higher is better)

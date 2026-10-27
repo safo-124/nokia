@@ -64,8 +64,8 @@ def client():
             frame = np.array([[4, 0], [0, 0]], dtype="<f4")
             if t == T[1]:
                 frame[1, 1] = np.nan
-            conn.execute("INSERT INTO rain_grid (dataset, time, rain_rate, motion_dx, speed_kmh, bearing_deg) "
-                         "VALUES ('test', %s, %s, 1, 30, 90)", (t, frame.tobytes()))
+            conn.execute("INSERT INTO rain_grid (dataset, time, rain_rate, motion_dx, speed_kmh, bearing_deg, "
+                         "speed_sd_kmh) VALUES ('test', %s, %s, 1, 30, 90, 3)", (t, frame.tobytes()))
         conn.execute("INSERT INTO gauges (dataset, id, lat, lon) VALUES ('test', 'G1', 0, 0)")
         for t, g, e in zip(T, [0, 4, 8], [0, 5, 9]):
             conn.execute("INSERT INTO gauge_rain (dataset, gauge_id, time, gauge, estimate) "
@@ -79,9 +79,10 @@ def client():
                 (t, level, fc),
             )
         conn.execute(
-            "INSERT INTO alerts (dataset, time, hotspot_id, name, kind, level, eta_min, acc_1h, message) VALUES "
-            "('test', %s, 'h1', 'Here', 'forecast', 'medium', 2, 18, 'Expect rain'), "
-            "('test', %s, 'h1', 'Here', 'observed', 'medium', NULL, 16, 'Watch out')",
+            "INSERT INTO alerts (dataset, time, hotspot_id, name, kind, level, eta_min, eta_low_min, eta_high_min, "
+            "acc_1h, message) VALUES "
+            "('test', %s, 'h1', 'Here', 'forecast', 'medium', 2, 1, 5, 18, 'Expect rain'), "
+            "('test', %s, 'h1', 'Here', 'observed', 'medium', NULL, NULL, NULL, 16, 'Watch out')",
             (T[0], T[2]),
         )
 
@@ -115,7 +116,7 @@ def test_link_series_keeps_nulls(client):
 def test_grid_nan_becomes_null(client):
     body = client.get("/api/datasets/test/rainfall/grid", params={"time": ISO[1]}).json()
     assert body["rain_rate"] == [[4.0, 0.0], [0.0, None]]
-    assert body["motion"] == {"speed_kmh": 30.0, "bearing_deg": 90.0}
+    assert body["motion"] == {"speed_kmh": 30.0, "bearing_deg": 90.0, "speed_sd_kmh": 3.0}
 
 
 def test_grid_nowcast_moves_rain_with_the_storm(client):
@@ -130,7 +131,7 @@ def test_gauge_comparison_and_alerts(client):
     assert body["estimate"] == [0.0, 5.0, 9.0]
     assert body["stats"]["correlation"] > 0.99
     early = client.get("/api/datasets/test/alerts", params={"until": ISO[1]}).json()
-    assert [(a["kind"], a["eta_min"]) for a in early] == [("forecast", 2)]
+    assert [(a["kind"], a["eta_min"], a["eta_low_min"], a["eta_high_min"]) for a in early] == [("forecast", 2, 1, 5)]
     assert [a["message"] for a in client.get("/api/datasets/test/alerts").json()] == ["Expect rain", "Watch out"]
 
 

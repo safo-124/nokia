@@ -68,7 +68,8 @@ function fmt(rate: number | null | undefined): string {
 const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
 
 function StormBadge({ grid }: { grid: GridFrame }) {
-  const { speed_kmh, bearing_deg } = grid.motion;
+  const { speed_kmh, bearing_deg, speed_sd_kmh } = grid.motion;
+  const plusMinus = speed_sd_kmh != null ? ` ± ${speed_sd_kmh.toFixed(0)}` : "";
   const moving = speed_kmh >= 1;
   return (
     <div className="absolute right-3 top-3 z-[1000] max-w-56 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] shadow-sm">
@@ -79,7 +80,7 @@ function StormBadge({ grid }: { grid: GridFrame }) {
           </svg>
         )}
         {moving
-          ? `Storm moving ${COMPASS[Math.round(bearing_deg / 45) % 8]} at ${speed_kmh.toFixed(0)} km/h`
+          ? `Storm moving ${COMPASS[Math.round(bearing_deg / 45) % 8]} at ${speed_kmh.toFixed(0)}${plusMinus} km/h`
           : "No clear storm motion"}
       </div>
       {grid.lead_min > 0 && (

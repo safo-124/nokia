@@ -31,6 +31,10 @@ export interface WarningPerformance {
   missed: number;
   median_lead_min: number | null;
   min_lead_min: number | null;
+  /** How far the stated arrival time was from when the level was reached */
+  median_eta_error_min?: number | null;
+  /** Share of hits where the level was reached inside the stated range */
+  eta_in_range?: number | null;
 }
 
 export interface Meta extends DatasetSummary {
@@ -75,7 +79,8 @@ export interface GridFrame {
   /** 0 for the observed map, otherwise minutes of nowcast after `time` */
   lead_min: number;
   valid_time: string;
-  motion: { speed_kmh: number; bearing_deg: number };
+  /** Storm motion from the Kalman filter; speed_sd_kmh is one standard deviation */
+  motion: { speed_kmh: number; bearing_deg: number; speed_sd_kmh: number | null };
   lat: number[];
   lon: number[];
   /** Rows run south to north; null where no link is close enough */
@@ -117,6 +122,9 @@ export interface Alert {
   kind: "forecast" | "observed";
   level: Level;
   eta_min: number | null;
+  /** Forecast alerts: arrival range from the storm speed's uncertainty (null if no range) */
+  eta_low_min: number | null;
+  eta_high_min: number | null;
   /** observed: mm in the last hour; forecast: mm expected in the next hour */
   acc_1h: number;
   message: string;

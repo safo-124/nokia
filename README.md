@@ -73,7 +73,7 @@ python -m s2r.run [--source synthetic|openmrg] [--dataset NAME] [--wet-dry auto|
 | Rain rate | `s2r/rain.py` | pycomlink: constant baseline, wet antenna correction (Schleiss 2013), ITU-R P.838 k-R power law |
 | Quality | `s2r/quality.py` | Leaves out links with no data, links under 0.5 km, links noisier in dry weather than the wet/dry threshold, and links with far more rain than their neighbours; drops single readings over 200 mm/h. Shown dashed grey on the map with the reason |
 | Map | `s2r/interpolate.py` | Inverse distance weighting from link midpoints onto a 0.5 km grid |
-| Nowcast | `s2r/nowcast.py` | Storm motion from consecutive maps (global Lucas-Kanade), then the map moved along it 0 to 60 min ahead. Scored against "rain stays put" |
+| Nowcast | `s2r/nowcast.py` | Storm motion measured every 5 min from consecutive maps (global Lucas-Kanade, with an error estimate), combined over time by a Kalman filter that also gives the speed's uncertainty. The map is moved along it 0 to 60 min ahead and scored against "rain stays put" |
 | Flood risk | `s2r/flood.py` | Placeholder rule on 1 h / 3 h rain at each hotspot, applied to now and to the next hour (fallen + forecast rain). Early warnings when the forecast level is higher than now, plus alerts when a level is reached |
 | Store | `s2r/db.py` | Replaces the dataset in PostgreSQL in one transaction (bulk `COPY`) |
 
@@ -122,13 +122,19 @@ under-estimated rather than noisy.
 
 | Data | +15 min | +30 min | +60 min | Early warnings |
 |---|---|---|---|---|
-| Synthetic Accra | 0.93 / 0.89 | 0.85 / 0.79 | 0.53 / 0.58 | 14 of 14 came true, median 30 min ahead (at least 21), no false alarms or misses |
-| OpenMRG Gothenburg | 0.51 / 0.44 | 0.41 / 0.28 | 0.29 / 0.15 | no hotspots |
+| Synthetic Accra | 0.93 / 0.89 | 0.85 / 0.79 | 0.51 / 0.58 | 14 of 14 came true, median 28 min ahead (at least 18), no false alarms or misses; arrival time off by a median of 3.5 min, and every time inside the stated range |
+| OpenMRG Gothenburg | 0.52 / 0.44 | 0.43 / 0.28 | 0.30 / 0.15 | no hotspots |
 
-On real data the nowcast gets about 50% more of the rain right at +30 min and almost twice as much at +60 min.
-The synthetic warnings come from a clean, steadily moving storm, so treat 30 minutes as the best case. At +60 min
-on the synthetic storm the nowcast now loses to "rain stays put": the cleaner AI rain field makes persistence
-stronger, while the motion estimate is still too fast (about 21 km/h against 12) for the storm's first half hour.
+On real data the nowcast gets about 55% more of the rain right at +30 min and about twice as much at +60 min.
+The synthetic warnings come from a clean, steadily moving storm, so treat 28 minutes as the best case.
+
+**Kalman filter vs the earlier 30-minute median** of the motion measurements: OpenMRG CSI +15/+30/+60 went from
+0.51/0.41/0.29 to 0.52/0.43/0.30. On the synthetic storm warnings state their arrival time slightly better (median
+error 4.0 to 3.5 min) and now come with a range, but arrive slightly later (median 30.5 to 28 min ahead), and +60 min
+CSI is 0.51 against 0.53. The filter can't fix the synthetic storm's first half hour, where every measurement points
+north-west at 15-18 km/h (true: west at 12) because of where the links sit; it only stops trusting them blindly. At
++60 min the synthetic nowcast loses to "rain stays put" either way. The filter settings came from a small sweep in which
+all combinations scored within 0.01 CSI on OpenMRG.
 
 ## API
 
@@ -171,7 +177,9 @@ Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dat
 - For Ghana there is no radar to train on. The model would have to be trained elsewhere (OpenMRG) or on GMet gauges,
   and its transfer to tropical rain and a different network is untested.
 - The nowcast moves the whole map with one motion vector and keeps rain intensity fixed: no growth, decay or new cells,
-  and nothing is known about rain that is still outside the network. While a storm enters the map the direction wobbles
-  (the synthetic storm shows north-west for a few minutes before settling on west).
+  and nothing is known about rain that is still outside the network. While a storm enters the map the direction is off
+  (the synthetic storm shows north-west for its first hour before settling on west).
+- Warning time ranges scale the arrival time by the speed uncertainty only; errors in direction or in the storm's shape
+  are not in the range. Early warnings are wide (for example "40-90 min") because the filter is still unsure.
 - The map uses link midpoints for interpolation and fills the whole network bounding box.
 - Base map tiles come from tile.openstreetmap.org and need internet at the venue.

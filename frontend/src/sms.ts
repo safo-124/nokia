@@ -17,17 +17,25 @@ const LEVEL_WORD: Record<Language, Record<Level, string>> = {
   tw: { low: "KAKRA", medium: "MFINIMFINI", high: "KƐSEƐ" },
 };
 
+/** "25-40" when the warning has a time range, otherwise the single estimate. Plain hyphen: an en dash would push the SMS into Unicode. */
+export function arrival(alert: Alert): string {
+  return alert.eta_low_min != null && alert.eta_high_min != null
+    ? `${alert.eta_low_min}-${alert.eta_high_min}`
+    : `${alert.eta_min}`;
+}
+
 export function smsText(alert: Alert, lang: Language): string {
   const level = LEVEL_WORD[lang][alert.level];
   const mm = Math.round(alert.acc_1h);
-  const { name, eta_min: eta } = alert;
+  const { name } = alert;
+  const ranged = alert.eta_low_min != null;
   if (lang === "en") {
     return alert.kind === "forecast"
-      ? `WARNING: ${level} flood risk in ${name} in about ${eta} min. ${mm}mm of rain expected in the next hour. Clear drains, keep off low roads.`
+      ? `WARNING: ${level} flood risk in ${name} in ${ranged ? "" : "about "}${arrival(alert)} min. ${mm}mm of rain expected in the next hour. Clear drains, keep off low roads.`
       : `ALERT: ${level} flood risk in ${name} now. ${mm}mm of rain in the last hour. Keep away from drains and low roads.`;
   }
   return alert.kind === "forecast"
-    ? `KƆKƆBƆ: Nsuyiri asiane ${level} reba ${name} wɔ simma ${eta} mu. Nsuo ${mm}mm bɛtɔ dɔnhwerew a ɛreba no mu. Monsiesie gota, montwe mo ho mfi mmeae a ɛda fam.`
+    ? `KƆKƆBƆ: Nsuyiri asiane ${level} reba ${name} wɔ simma ${arrival(alert)} mu. Nsuo ${mm}mm bɛtɔ dɔnhwerew a ɛreba no mu. Monsiesie gota, montwe mo ho mfi mmeae a ɛda fam.`
     : `KƆKƆBƆ: Nsuyiri asiane ${level} wɔ ${name} seesei. Nsuo ${mm}mm atɔ dɔnhwerew a atwam no mu. Montwe mo ho mfi gota ne mmeae a ɛda fam.`;
 }
 
