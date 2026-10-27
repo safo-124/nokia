@@ -13,6 +13,7 @@ import type {
   Gauges,
   GridFrame,
   Hotspots,
+  Lead,
   LinkRain,
   Links,
   Meta,
@@ -27,6 +28,43 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h2 className="mb-2 text-sm font-semibold">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function NowcastScores({ nowcast }: { nowcast: Meta["nowcast"] }) {
+  if (!nowcast) return <p className="text-sm text-[var(--muted)]">Re-run the pipeline to add the nowcast.</p>;
+  const w = nowcast.warnings;
+  return (
+    <div className="space-y-3 text-sm">
+      {w && (
+        <p>
+          <span className="tabular">{w.hits}</span> of <span className="tabular">{w.warnings}</span> early warnings came
+          true, a median of <strong className="tabular">{w.median_lead_min ?? "–"} min</strong> before the level was
+          reached. {w.false_alarms} false alarms, {w.missed} missed.
+        </p>
+      )}
+      <table className="tabular w-full">
+        <caption className="mb-1 text-left text-xs text-[var(--muted)]">
+          Rain above {nowcast.skill[0]?.threshold_mm_h} mm/h hit where forecast (CSI, higher is better)
+        </caption>
+        <thead className="text-left text-xs text-[var(--muted)]">
+          <tr>
+            <th className="font-normal">Ahead</th>
+            <th className="font-normal">Nowcast</th>
+            <th className="font-normal">Rain stays put</th>
+          </tr>
+        </thead>
+        <tbody>
+          {nowcast.skill.map((s) => (
+            <tr key={s.lead_min}>
+              <td>+{s.lead_min} min</td>
+              <td>{s.csi.nowcast ?? "–"}</td>
+              <td>{s.csi.persistence ?? "–"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -80,6 +118,7 @@ export default function App() {
   const [layers, setLayers] = useState<StaticLayers | null>(null);
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [lead, setLead] = useState<Lead>(0);
   const [frame, setFrame] = useState<Frame>({});
   const [selectedGauge, setSelectedGauge] = useState<string | null>(null);
 
@@ -125,7 +164,7 @@ export default function App() {
     if (!dataset || !meta || !currentTime) return;
     let cancelled = false;
     Promise.all([
-      dataset.grid(currentTime),
+      dataset.grid(currentTime, lead),
       dataset.linkRain(currentTime),
       meta.has_flood_risk ? dataset.floodRisk(currentTime) : null,
     ])
@@ -134,7 +173,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [dataset, meta, currentTime]);
+  }, [dataset, meta, currentTime, lead]);
 
   useEffect(() => {
     if (!playing || !meta) return;
@@ -202,12 +241,17 @@ export default function App() {
             onIndex={setIndex}
             playing={playing}
             onPlaying={setPlaying}
+            lead={lead}
+            onLead={setLead}
           />
         </main>
 
         <aside className="w-full overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] lg:w-96">
           <Section title={`Alerts (${issued})`}>
             <AlertPanel alerts={layers.alerts} currentTime={currentTime} hasFloodRisk={meta.has_flood_risk} />
+          </Section>
+          <Section title="Nowcast (how well it predicts)">
+            <NowcastScores nowcast={meta.nowcast} />
           </Section>
           <Section title={`Validation: gauge ${selectedGauge ?? ""}`}>
             <GaugeChart dataset={dataset} gaugeId={selectedGauge} currentTime={currentTime} dark={dark} />

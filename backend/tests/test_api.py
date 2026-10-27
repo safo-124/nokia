@@ -50,21 +50,39 @@ def client():
             (Jsonb({"source": "test", "region": "Nowhere", "has_flood_risk": True}), [0.0, 0.01], [0.0, 0.01]),
         )
         for cml in ("10001", "10002"):
-            conn.execute("INSERT INTO links VALUES ('test', %s, 0, 0, 0.01, 0.01, 1.5, 23, 'V')", (cml,))
+            conn.execute(
+                "INSERT INTO links (dataset, id, site_0_lat, site_0_lon, site_1_lat, site_1_lon, "
+                "length_km, frequency_ghz, polarization) VALUES ('test', %s, 0, 0, 0.01, 0.01, 1.5, 23, 'V')",
+                (cml,),
+            )
         for t, a, b in zip(T, [0, 5, 10], [0, 0, None]):
-            conn.execute("INSERT INTO link_rain VALUES ('test', %s, '10001', %s, true)", (t, a))
-            conn.execute("INSERT INTO link_rain VALUES ('test', %s, '10002', %s, false)", (t, b))
-            frame = np.zeros((2, 2), dtype="<f4")
+            conn.execute("INSERT INTO link_rain (dataset, time, cml_id, rain_rate, wet) "
+                         "VALUES ('test', %s, '10001', %s, true), ('test', %s, '10002', %s, false)",
+                         (t, a, t, b))
+            # 2 x 2 map with rain only in the south-west cell; storm moves 1 cell east per minute
+            frame = np.array([[4, 0], [0, 0]], dtype="<f4")
             if t == T[1]:
-                frame[0, 0] = np.nan
-            conn.execute("INSERT INTO rain_grid VALUES ('test', %s, %s)", (t, frame.tobytes()))
-        conn.execute("INSERT INTO gauges VALUES ('test', 'G1', 0, 0)")
+                frame[1, 1] = np.nan
+            conn.execute("INSERT INTO rain_grid (dataset, time, rain_rate, motion_dx, speed_kmh, bearing_deg) "
+                         "VALUES ('test', %s, %s, 1, 30, 90)", (t, frame.tobytes()))
+        conn.execute("INSERT INTO gauges (dataset, id, lat, lon) VALUES ('test', 'G1', 0, 0)")
         for t, g, e in zip(T, [0, 4, 8], [0, 5, 9]):
-            conn.execute("INSERT INTO gauge_rain VALUES ('test', 'G1', %s, %s, %s)", (t, g, e))
-        conn.execute("INSERT INTO hotspots VALUES ('test', 'h1', 'Here', 1.0, 0, 0)")
-        for t, level in zip(T, ["low", "low", "medium"]):
-            conn.execute("INSERT INTO flood_risk VALUES ('test', %s, 'h1', 1, 1, 1, 0.5, %s)", (t, level))
-        conn.execute("INSERT INTO alerts VALUES ('test', %s, 'h1', 'Here', 'medium', 16, 'Watch out')", (T[2],))
+            conn.execute("INSERT INTO gauge_rain (dataset, gauge_id, time, gauge, estimate) "
+                         "VALUES ('test', 'G1', %s, %s, %s)", (t, g, e))
+        conn.execute("INSERT INTO hotspots (dataset, id, name, vulnerability, lat, lon) "
+                     "VALUES ('test', 'h1', 'Here', 1.0, 0, 0)")
+        for t, level, fc in zip(T, ["low", "low", "medium"], ["medium", "medium", "medium"]):
+            conn.execute(
+                "INSERT INTO flood_risk (dataset, time, hotspot_id, rain_rate, acc_1h, acc_3h, risk, level, "
+                "fc_level, fc_eta_min, fc_acc_1h) VALUES ('test', %s, 'h1', 1, 1, 1, 0.5, %s, %s, 20, 18)",
+                (t, level, fc),
+            )
+        conn.execute(
+            "INSERT INTO alerts (dataset, time, hotspot_id, name, kind, level, eta_min, acc_1h, message) VALUES "
+            "('test', %s, 'h1', 'Here', 'forecast', 'medium', 2, 18, 'Expect rain'), "
+            "('test', %s, 'h1', 'Here', 'observed', 'medium', NULL, 16, 'Watch out')",
+            (T[0], T[2]),
+        )
 
     db.configure(TEST_URL)
     yield TestClient(app)
@@ -89,21 +107,30 @@ def test_link_series_keeps_nulls(client):
 
 def test_grid_nan_becomes_null(client):
     body = client.get("/api/datasets/test/rainfall/grid", params={"time": ISO[1]}).json()
-    assert body["rain_rate"][0][0] is None
-    assert body["rain_rate"][1][1] == 0.0
+    assert body["rain_rate"] == [[4.0, 0.0], [0.0, None]]
+    assert body["motion"] == {"speed_kmh": 30.0, "bearing_deg": 90.0}
+
+
+def test_grid_nowcast_moves_rain_with_the_storm(client):
+    body = client.get("/api/datasets/test/rainfall/grid", params={"time": ISO[0], "lead": 1}).json()
+    assert body["valid_time"] == "2026-06-15T12:01:00"
+    assert body["rain_rate"] == [[None, 4.0], [None, 0.0]]  # one cell east, nothing known behind it
+    assert client.get("/api/datasets/test/rainfall/grid", params={"lead": 61}).status_code == 422
 
 
 def test_gauge_comparison_and_alerts(client):
     body = client.get("/api/datasets/test/gauges/G1/comparison", params={"minutes": 1}).json()
     assert body["estimate"] == [0.0, 5.0, 9.0]
     assert body["stats"]["correlation"] > 0.99
-    assert client.get("/api/datasets/test/alerts", params={"until": ISO[1]}).json() == []
-    assert client.get("/api/datasets/test/alerts").json()[0]["message"] == "Watch out"
+    early = client.get("/api/datasets/test/alerts", params={"until": ISO[1]}).json()
+    assert [(a["kind"], a["eta_min"]) for a in early] == [("forecast", 2)]
+    assert [a["message"] for a in client.get("/api/datasets/test/alerts").json()] == ["Expect rain", "Watch out"]
 
 
-def test_flood_risk_at_time(client):
-    body = client.get("/api/datasets/test/flood-risk", params={"time": ISO[2]}).json()
-    assert body["hotspots"][0]["level"] == "medium"
+def test_flood_risk_includes_forecast(client):
+    body = client.get("/api/datasets/test/flood-risk", params={"time": ISO[0]}).json()
+    h = body["hotspots"][0]
+    assert (h["level"], h["fc_level"], h["fc_eta_min"], h["fc_acc_1h"]) == ("low", "medium", 20, 18.0)
 
 
 def test_unknown_things_are_404(client):

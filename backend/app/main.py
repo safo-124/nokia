@@ -1,10 +1,10 @@
 """Signal-to-Rain API. Reads what the pipeline stored in PostgreSQL (db/schema.sql)."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from psycopg_pool import PoolTimeout
@@ -134,13 +134,32 @@ def link_series(dataset: str, cml_id: str):
             "rain_rate": [r["rain_rate"] for r in rows]}
 
 
+def _shift(field, dy, dx):
+    """Move a 2D field by (dy, dx) cells (rounded); cells with no source are NaN.
+
+    Same as shift_field in pipeline/s2r/nowcast.py.
+    """
+    dy, dx = int(round(dy)), int(round(dx))
+    out = np.full_like(field, np.nan)
+    ny, nx = field.shape
+    if abs(dy) >= ny or abs(dx) >= nx:
+        return out
+    out[max(0, dy): min(ny, ny + dy), max(0, dx): min(nx, nx + dx)] = \
+        field[max(0, -dy): min(ny, ny - dy), max(0, -dx): min(nx, nx - dx)]
+    return out
+
+
 @app.get("/api/datasets/{dataset}/rainfall/grid")
-def rainfall_grid(dataset: str, time: datetime | None = None):
-    """Interpolated rainfall map [mm/h] at one time step. Rows run south to north."""
+def rainfall_grid(dataset: str, time: datetime | None = None, lead: int = Query(0, ge=0, le=60)):
+    """Rainfall map [mm/h] at one time step, or the nowcast `lead` minutes after it.
+
+    Rows run south to north. The nowcast moves the map along the storm motion
+    estimated at `time`.
+    """
     t = _step(dataset, time)
     row = query(
         """
-        SELECT g.rain_rate, d.grid_lat, d.grid_lon
+        SELECT g.rain_rate, g.motion_dy, g.motion_dx, g.speed_kmh, g.bearing_deg, d.grid_lat, d.grid_lon
         FROM rain_grid g JOIN datasets d ON d.id = g.dataset
         WHERE g.dataset = %s AND g.time = %s
         """,
@@ -148,12 +167,17 @@ def rainfall_grid(dataset: str, time: datetime | None = None):
         one=True,
     )
     lat, lon = row["grid_lat"], row["grid_lon"]
-    frame = np.frombuffer(row["rain_rate"], dtype="<f4").reshape(len(lat), len(lon)).round(1)
+    frame = np.frombuffer(row["rain_rate"], dtype="<f4").reshape(len(lat), len(lon))
+    if lead:
+        frame = _shift(frame, row["motion_dy"] * lead, row["motion_dx"] * lead)
     return {
         "time": _iso(t),
+        "lead_min": lead,
+        "valid_time": _iso(t + timedelta(minutes=lead)),
+        "motion": {"speed_kmh": row["speed_kmh"], "bearing_deg": row["bearing_deg"]},
         "lat": [round(v, 5) for v in lat],
         "lon": [round(v, 5) for v in lon],
-        "rain_rate": [_nan_to_none(r) for r in frame],
+        "rain_rate": [_nan_to_none(r) for r in frame.round(1)],
     }
 
 
@@ -209,11 +233,16 @@ def hotspots(dataset: str):
 
 @app.get("/api/datasets/{dataset}/flood-risk")
 def flood_risk(dataset: str, time: datetime | None = None):
-    """Risk level per hotspot at one time step, highest risk first."""
+    """Risk level per hotspot at one time step, highest risk first.
+
+    fc_level / fc_eta_min / fc_acc_1h: the highest level the nowcast expects
+    within the next hour, minutes until then, and rain expected in that hour.
+    """
     t = _step(dataset, time)
     rows = query(
         """
-        SELECT hotspot_id, rain_rate, acc_1h, acc_3h, risk, level FROM flood_risk
+        SELECT hotspot_id, rain_rate, acc_1h, acc_3h, risk, level, fc_level, fc_eta_min, fc_acc_1h
+        FROM flood_risk
         WHERE dataset = %s AND time = %s ORDER BY risk DESC, hotspot_id
         """,
         (dataset, t),
@@ -223,12 +252,15 @@ def flood_risk(dataset: str, time: datetime | None = None):
 
 @app.get("/api/datasets/{dataset}/alerts")
 def alerts(dataset: str, until: datetime | None = None):
-    """Alerts issued up to `until` (all of them if omitted)."""
+    """Alerts issued up to `until` (all of them if omitted).
+
+    kind is "forecast" (early warning from the nowcast, with eta_min) or "observed".
+    """
     rows = query(
         """
-        SELECT time, hotspot_id, name, level, acc_1h, message FROM alerts
+        SELECT time, hotspot_id, name, kind, level, eta_min, acc_1h, message FROM alerts
         WHERE dataset = %(ds)s AND (%(until)s::timestamp IS NULL OR time <= %(until)s::timestamp)
-        ORDER BY time
+        ORDER BY time, kind  -- 'forecast' before 'observed' at the same minute
         """,
         {"ds": dataset, "until": until},
     )

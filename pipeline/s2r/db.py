@@ -66,7 +66,7 @@ def _links_frame(dataset, cmls):
     )
 
 
-def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate, grid,
+def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate, grid, motion,
          hotspots=None, risk=None, alert_list=None):
     """Replace `dataset` with this run's results, in one transaction."""
     times = pd.DatetimeIndex(grid.time.values)
@@ -88,7 +88,15 @@ def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate,
 
         frames = grid.values.astype("<f4")
         _copy(conn, "rain_grid", pd.DataFrame(
-            {"dataset": dataset, "time": times, "rain_rate": [f.tobytes() for f in frames]}
+            {
+                "dataset": dataset,
+                "time": times,
+                "rain_rate": [f.tobytes() for f in frames],
+                "motion_dy": motion.dy.values.round(4),
+                "motion_dx": motion.dx.values.round(4),
+                "speed_kmh": motion.speed_kmh.values.round(1),
+                "bearing_deg": motion.bearing_deg.values.round(0),
+            }
         ))
 
         _copy(conn, "gauges", pd.DataFrame(
@@ -109,12 +117,15 @@ def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate,
             _copy(conn, "hotspots", hotspots[["id", "name", "vulnerability", "lat", "lon"]]
                   .assign(dataset=dataset)[["dataset", "id", "name", "vulnerability", "lat", "lon"]])
             risk = risk.assign(dataset=dataset)
-            for col in ("rain_rate", "acc_1h", "acc_3h", "risk"):
+            for col in ("rain_rate", "acc_1h", "acc_3h", "risk", "fc_acc_1h"):
                 risk[col] = risk[col].astype(float).round(2)
-            _copy(conn, "flood_risk", risk[["dataset", "time", "hotspot_id", "rain_rate",
-                                            "acc_1h", "acc_3h", "risk", "level"]])
+            risk["fc_eta_min"] = risk.fc_eta_min.astype(int)
+            _copy(conn, "flood_risk", risk[["dataset", "time", "hotspot_id", "rain_rate", "acc_1h",
+                                            "acc_3h", "risk", "level", "fc_level", "fc_eta_min",
+                                            "fc_acc_1h"]])
             if alert_list:
                 alerts = pd.DataFrame(alert_list).assign(dataset=dataset)
                 alerts["time"] = pd.to_datetime(alerts.time)
-                _copy(conn, "alerts", alerts[["dataset", "time", "hotspot_id", "name", "level",
-                                              "acc_1h", "message"]])
+                alerts["eta_min"] = alerts.eta_min.astype("Int64")
+                _copy(conn, "alerts", alerts[["dataset", "time", "hotspot_id", "name", "kind", "level",
+                                              "eta_min", "acc_1h", "message"]])

@@ -34,6 +34,8 @@ export const RISK: Record<Level, { color: string; label: string }> = {
   high: { color: "#d03b3b", label: "High" },
 };
 
+export const LEVEL_RANK: Record<Level, number> = { low: 0, medium: 1, high: 2 };
+
 export interface SeriesColors {
   estimate: string;
   gauge: string;

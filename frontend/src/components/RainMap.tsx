@@ -1,5 +1,5 @@
 import type { LatLngBoundsExpression, LatLngTuple } from "leaflet";
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import {
   CircleMarker,
   ImageOverlay,
@@ -10,7 +10,7 @@ import {
   useMap,
 } from "react-leaflet";
 
-import { hexToRgb, RAIN_STEPS, rainColor, RISK, SERIES } from "../colors";
+import { hexToRgb, LEVEL_RANK, RAIN_STEPS, rainColor, RISK, SERIES } from "../colors";
 import type { FloodRisk, Gauges, GridFrame, HotspotRisk, Hotspots, LinkRain, Links, Meta } from "../types";
 
 // Standard OSM tiles are fine for a demo; see their usage policy before production.
@@ -63,6 +63,33 @@ const toLatLng = ([lon, lat]: number[]): LatLngTuple => [lat, lon];
 
 function fmt(rate: number | null | undefined): string {
   return rate == null ? "no data" : `${rate.toFixed(1)} mm/h`;
+}
+
+const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+
+function StormBadge({ grid }: { grid: GridFrame }) {
+  const { speed_kmh, bearing_deg } = grid.motion;
+  const moving = speed_kmh >= 1;
+  return (
+    <div className="absolute right-3 top-3 z-[1000] max-w-56 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] shadow-sm">
+      <div className="flex items-center gap-2 font-medium text-[var(--ink)]">
+        {moving && (
+          <svg width="16" height="16" viewBox="0 0 16 16" style={{ transform: `rotate(${bearing_deg}deg)` }} aria-hidden>
+            <path d="M8 1 L13 9 H9.5 V15 H6.5 V9 H3 Z" fill="currentColor" />
+          </svg>
+        )}
+        {moving
+          ? `Storm moving ${COMPASS[Math.round(bearing_deg / 45) % 8]} at ${speed_kmh.toFixed(0)} km/h`
+          : "No clear storm motion"}
+      </div>
+      {grid.lead_min > 0 && (
+        <div className="mt-1">
+          Nowcast for {grid.valid_time.slice(11, 16)} (+{grid.lead_min} min). Rain moves with the storm; areas
+          without a source upwind stay blank.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Legend({ showRisk }: { showRisk: boolean }) {
@@ -194,26 +221,45 @@ export default function RainMap({
           const { id, name } = f.properties;
           const r = riskById[id];
           const level = RISK[r?.level ?? "low"];
+          // A dashed ring in the forecast colour when the nowcast expects worse within the hour
+          const rising = r?.fc_level && LEVEL_RANK[r.fc_level] > LEVEL_RANK[r.level] ? r.fc_level : null;
+          const center = toLatLng(f.geometry.coordinates);
           return (
-            <CircleMarker
-              key={id}
-              center={toLatLng(f.geometry.coordinates)}
-              radius={9}
-              pathOptions={{ color: "#0b0b0b", weight: 1, fillColor: level.color, fillOpacity: 0.95 }}
-            >
-              <Tooltip>
-                <strong>{name}</strong> · {level.label} flood risk
-                {r && (
-                  <>
-                    <br />
-                    {r.acc_1h.toFixed(0)} mm last hour, {r.acc_3h.toFixed(0)} mm last 3 hours
-                  </>
-                )}
-              </Tooltip>
-            </CircleMarker>
+            <Fragment key={id}>
+              {rising && (
+                <CircleMarker
+                  center={center}
+                  radius={15}
+                  pathOptions={{ color: RISK[rising].color, weight: 3, dashArray: "5 4", fill: false, interactive: false }}
+                />
+              )}
+              <CircleMarker
+                center={center}
+                radius={9}
+                pathOptions={{ color: "#0b0b0b", weight: 1, fillColor: level.color, fillOpacity: 0.95 }}
+              >
+                <Tooltip>
+                  <strong>{name}</strong> · {level.label} flood risk now
+                  {r && (
+                    <>
+                      <br />
+                      {r.acc_1h.toFixed(0)} mm last hour, {r.acc_3h.toFixed(0)} mm last 3 hours
+                    </>
+                  )}
+                  {rising && r && (
+                    <>
+                      <br />
+                      <strong>Expected: {RISK[rising].label} in about {r.fc_eta_min} min</strong> (
+                      {r.fc_acc_1h?.toFixed(0)} mm forecast next hour)
+                    </>
+                  )}
+                </Tooltip>
+              </CircleMarker>
+            </Fragment>
           );
         })}
       </MapContainer>
+      {grid && <StormBadge grid={grid} />}
       <Legend showRisk={Boolean(hotspots)} />
     </div>
   );

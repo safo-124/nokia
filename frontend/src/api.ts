@@ -37,7 +37,8 @@ export const api = {
       meta: () => get<Meta>(`${ds}/meta`),
       links: () => get<Links>(`${ds}/links`),
       linkRain: (time: string) => get<LinkRain>(`${ds}/links/rain`, { time }),
-      grid: (time: string) => get<GridFrame>(`${ds}/rainfall/grid`, { time }),
+      grid: (time: string, lead = 0) =>
+        get<GridFrame>(`${ds}/rainfall/grid`, { time, lead: String(lead) }),
       gauges: () => get<Gauges>(`${ds}/gauges`),
       gaugeComparison: (gaugeId: string) =>
         get<GaugeComparison>(`${ds}/gauges/${encodeURIComponent(gaugeId)}/comparison`),

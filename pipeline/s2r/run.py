@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import data, db, flood, interpolate, rain, wetdry
+from . import data, db, flood, interpolate, nowcast, rain, wetdry
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_HOTSPOTS = {"synthetic": DATA_DIR / "hotspots" / "accra.geojson"}
@@ -70,14 +70,22 @@ def main(argv=None):
     grid = interpolate.idw_grid(r_link, mid_lat, mid_lon, lat, lon)
     gauge_estimate = interpolate.sample_grid(grid, gauges.lat.values, gauges.lon.values)
 
+    print("Nowcasting: estimating storm motion")
+    motion = nowcast.estimate_motion(grid)
+    nowcast_meta = {"skill": [nowcast.skill(grid, motion, lead_min=lead) for lead in (15, 30, 60)]}
+    for s in nowcast_meta["skill"]:
+        print(f"  +{s['lead_min']} min CSI: nowcast {s['csi']['nowcast']}, "
+              f"persistence {s['csi']['persistence']}")
+
     hotspots_path = args.hotspots or DEFAULT_HOTSPOTS.get(args.source)
     hotspots = risk = alert_list = None
     if hotspots_path:
         print(f"Scoring flood risk for {hotspots_path.name}")
         hotspots = flood.load_hotspots(hotspots_path)
-        risk = flood.score(grid, hotspots)
+        risk = flood.score(grid, hotspots, motion)
         alert_list = flood.alerts(risk, hotspots)
-        print(f"  {len(alert_list)} alerts")
+        nowcast_meta["warnings"] = flood.warning_performance(alert_list)
+        print(f"  {len(alert_list)} alerts; early warnings: {json.dumps(nowcast_meta['warnings'])}")
 
     meta = {
         "source": args.source,
@@ -88,6 +96,7 @@ def main(argv=None):
         "wet_dry_method": args.wet_dry,
         "wet_dry_scores": scores,
         "has_flood_risk": hotspots is not None,
+        "nowcast": nowcast_meta,
         "generated_at": datetime.now(timezone.utc).strftime(db.TIME_FORMAT),
     }
     dataset = args.dataset or args.source
@@ -103,6 +112,7 @@ def main(argv=None):
             gauges=gauges,
             gauge_estimate=gauge_estimate,
             grid=grid,
+            motion=motion,
             hotspots=hotspots,
             risk=risk,
             alert_list=alert_list,
