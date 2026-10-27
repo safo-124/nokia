@@ -4,7 +4,7 @@ import numpy as np
 import psycopg
 import pytest
 
-from s2r import data, db, interpolate, nowcast, rain, run, wetdry
+from s2r import data, db, interpolate, nowcast, quality, rain, run, wetdry
 
 
 @pytest.fixture(scope="module")
@@ -43,6 +43,30 @@ def test_nowcast_tracks_the_synthetic_storm(synthetic):
 
     s = nowcast.skill(grid, motion, lead_min=30)
     assert s["csi"]["nowcast"] > s["csi"]["persistence"]
+
+
+def test_quality_check_names_each_fault(synthetic):
+    cmls, _ = synthetic
+    cmls = rain.estimate_rain_rate(cmls, wetdry.rolling_std(rain.trsl(cmls)))
+    r_link = rain.link_rain_rate(cmls)
+    clean = quality.check_links(cmls, r_link).query("reason.isna()").index[:4]
+    noisy, short, odd, dead = clean
+
+    rng = np.random.default_rng(0)
+    trsl = cmls.trsl.copy()
+    trsl.loc[{"cml_id": noisy}] = trsl.sel(cml_id=noisy) + rng.normal(0, 2, trsl.sel(cml_id=noisy).shape)
+    trsl.loc[{"cml_id": dead}] = np.nan
+    cmls = cmls.assign(trsl=trsl).assign_coords(length=cmls.length.where(cmls.cml_id != short, 0.3))
+    r_link = r_link.where(r_link.cml_id != odd, r_link * 10)
+
+    reasons = quality.check_links(cmls, r_link).reason
+    assert reasons[noisy] == "noisy"
+    assert reasons[short] == "too short"
+    assert reasons[odd] == "disagrees with neighbours"
+    assert reasons[dead] == "no data"
+
+    filtered, _ = quality.apply(r_link, quality.check_links(cmls, r_link))
+    assert filtered.sel(cml_id=odd).isnull().all()
 
 
 def test_run_saves_dataset(monkeypatch):

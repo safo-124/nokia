@@ -13,6 +13,8 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
+from . import quality
+
 DEFAULT_URL = "postgresql://postgres:postgres@localhost:5432/signal_to_rain"
 SCHEMA = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S"
@@ -50,11 +52,13 @@ def _copy(conn, table, df):
             copy.write_row(row)
 
 
-def _links_frame(dataset, cmls):
+def _links_frame(dataset, cmls, link_quality):
+    ids = cmls.cml_id.values.astype(str)
+    q = link_quality.loc[ids]
     return pd.DataFrame(
         {
             "dataset": dataset,
-            "id": cmls.cml_id.values.astype(str),
+            "id": ids,
             "site_0_lat": cmls.site_0_lat.values,
             "site_0_lon": cmls.site_0_lon.values,
             "site_1_lat": cmls.site_1_lat.values,
@@ -62,12 +66,14 @@ def _links_frame(dataset, cmls):
             "length_km": cmls.length.values.round(2),
             "frequency_ghz": cmls.frequency.mean("sublink_id").values.round(1),
             "polarization": cmls.polarization.isel(sublink_id=0).values.astype(str),
+            "excluded": q.reason.notna().values,
+            "exclude_reason": [quality.describe(r) if r.reason else None for r in q.itertuples()],
         }
     )
 
 
-def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate, grid, motion,
-         hotspots=None, risk=None, alert_list=None):
+def save(conn, dataset, *, meta, cmls, link_quality, r_link, wet_link, gauges, gauge_estimate, grid,
+         motion, hotspots=None, risk=None, alert_list=None):
     """Replace `dataset` with this run's results, in one transaction."""
     times = pd.DatetimeIndex(grid.time.values)
     with conn.transaction():
@@ -77,7 +83,7 @@ def save(conn, dataset, *, meta, cmls, r_link, wet_link, gauges, gauge_estimate,
             "INSERT INTO datasets (id, meta, grid_lat, grid_lon) VALUES (%s, %s, %s, %s)",
             (dataset, Jsonb(meta), grid.lat.values.tolist(), grid.lon.values.tolist()),
         )
-        _copy(conn, "links", _links_frame(dataset, cmls))
+        _copy(conn, "links", _links_frame(dataset, cmls, link_quality))
 
         link_rain = r_link.to_dataframe(name="rain_rate").reset_index()
         link_rain["wet"] = wet_link.transpose(*r_link.dims).values.reshape(-1)

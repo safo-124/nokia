@@ -67,6 +67,7 @@ python -m s2r.run [--source synthetic|openmrg] [--dataset NAME] [--wet-dry std|m
 | Load | `s2r/data.py`, `s2r/synthetic.py` | Links as xarray (`cml_id`, `sublink_id`, `time`) with `tsl`, `rsl`, plus gauges. `R_ref` is reference rain along each link (synthetic truth, or radar for OpenMRG) |
 | Wet/dry | `s2r/wetdry.py` | `std`: rolling standard deviation rule. `ml`: gradient-boosted classifier on signal features, trained and scored on held-out links |
 | Rain rate | `s2r/rain.py` | pycomlink: constant baseline, wet antenna correction (Schleiss 2013), ITU-R P.838 k-R power law |
+| Quality | `s2r/quality.py` | Leaves out links with no data, links under 0.5 km, links noisier in dry weather than the wet/dry threshold, and links with far more rain than their neighbours; drops single readings over 200 mm/h. Shown dashed grey on the map with the reason |
 | Map | `s2r/interpolate.py` | Inverse distance weighting from link midpoints onto a 0.5 km grid |
 | Nowcast | `s2r/nowcast.py` | Storm motion from consecutive maps (global Lucas-Kanade), then the map moved along it 0 to 60 min ahead. Scored against "rain stays put" |
 | Flood risk | `s2r/flood.py` | Placeholder rule on 1 h / 3 h rain at each hotspot, applied to now and to the next hour (fallen + forecast rain). Early warnings when the forecast level is higher than now, plus alerts when a level is reached |
@@ -96,12 +97,17 @@ SELECT cml_id, max(rain_rate) FROM link_rain WHERE dataset = 'openmrg' GROUP BY 
 
 The synthetic numbers only show the pipeline is wired correctly. The OpenMRG numbers are the ones to quote.
 
+**Quality checks** leave out 35 of 364 OpenMRG links (25 under 0.5 km, 10 with no data) and the 7 deliberately
+noisy synthetic links. On OpenMRG this cuts the summed gap between estimated and measured event totals at the
+10 gauges from 36.5 to 29.8 mm (18%), with the same mean correlation (0.81). The three weak gauges are not
+fixed by this: each has working links within about 1 km, and their rain is under-estimated rather than noisy.
+
 **Nowcast**, critical success index for rain above 1 mm/h (higher is better), nowcast / rain stays put:
 
 | Data | +15 min | +30 min | +60 min | Early warnings |
 |---|---|---|---|---|
-| Synthetic Accra | 0.85 / 0.83 | 0.78 / 0.70 | 0.53 / 0.47 | 14 of 14 came true, median 32 min ahead (at least 24), no false alarms or misses |
-| OpenMRG Gothenburg | 0.49 / 0.44 | 0.37 / 0.26 | 0.26 / 0.14 | no hotspots |
+| Synthetic Accra | 0.87 / 0.84 | 0.79 / 0.70 | 0.53 / 0.45 | 14 of 14 came true, median 32 min ahead (at least 21), no false alarms or misses |
+| OpenMRG Gothenburg | 0.48 / 0.44 | 0.37 / 0.26 | 0.25 / 0.14 | no hotspots |
 
 On real data the nowcast gets 42% more of the rain right at +30 min and almost twice as much at +60 min.
 The synthetic warnings come from a clean, steadily moving storm, so treat 32 minutes as the best case.
@@ -114,7 +120,7 @@ Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dat
 |---|---|
 | `GET /api/datasets` | stored datasets |
 | `GET .../meta` | source, region, bounds, time steps, wet/dry scores |
-| `GET .../links`, `GET .../links/rain?time=`, `GET .../links/{id}/series` | link geometry (GeoJSON); rain on every link at one step; one link's time series |
+| `GET .../links`, `GET .../links/rain?time=`, `GET .../links/{id}/series` | link geometry with quality flags (`excluded`, `exclude_reason`); rain on every link at one step; one link's time series |
 | `GET .../rainfall/grid?time=&lead=0..60` | rainfall map at one time step, or the nowcast `lead` minutes later, with the storm motion |
 | `GET .../gauges`, `GET .../gauges/{id}/comparison?minutes=15` | gauge locations; gauge vs link estimate as N-minute means |
 | `GET .../hotspots`, `GET .../flood-risk?time=` | hotspots; risk per hotspot at one step, highest first, with the level expected within the hour (`fc_level`, `fc_eta_min`, `fc_acc_1h`) |
@@ -136,7 +142,8 @@ Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dat
 
 - Hotspot coordinates in Accra are approximate and vulnerability is a placeholder 1.0; flood thresholds are demo assumptions,
   not GMet or NADMO warning levels.
-- A few OpenMRG links give implausible peaks (over 200 mm/h); there are no quality flags yet.
+- Quality thresholds (0.5 km, 0.8 dB, 4x neighbours, 200 mm/h) were picked by looking at these two datasets, not
+  taken from the literature or tuned on other networks.
 - The nowcast moves the whole map with one motion vector and keeps rain intensity fixed: no growth, decay or new cells,
   and nothing is known about rain that is still outside the network. While a storm enters the map the direction wobbles
   (the synthetic storm shows north-west for a few minutes before settling on west).

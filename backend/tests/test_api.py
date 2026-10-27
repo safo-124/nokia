@@ -49,11 +49,12 @@ def client():
             "INSERT INTO datasets (id, meta, grid_lat, grid_lon) VALUES ('test', %s, %s, %s)",
             (Jsonb({"source": "test", "region": "Nowhere", "has_flood_risk": True}), [0.0, 0.01], [0.0, 0.01]),
         )
-        for cml in ("10001", "10002"):
+        for cml, reason in (("10001", None), ("10002", "too short")):
             conn.execute(
-                "INSERT INTO links (dataset, id, site_0_lat, site_0_lon, site_1_lat, site_1_lon, "
-                "length_km, frequency_ghz, polarization) VALUES ('test', %s, 0, 0, 0.01, 0.01, 1.5, 23, 'V')",
-                (cml,),
+                "INSERT INTO links (dataset, id, site_0_lat, site_0_lon, site_1_lat, site_1_lon, length_km, "
+                "frequency_ghz, polarization, excluded, exclude_reason) "
+                "VALUES ('test', %s, 0, 0, 0.01, 0.01, 1.5, 23, 'V', %s, %s)",
+                (cml, reason is not None, reason),
             )
         for t, a, b in zip(T, [0, 5, 10], [0, 0, None]):
             conn.execute("INSERT INTO link_rain (dataset, time, cml_id, rain_rate, wet) "
@@ -93,6 +94,12 @@ def test_datasets_and_meta(client):
     assert {"id": "test", "source": "test", "region": "Nowhere", "n_links": None,
             "has_flood_risk": True, "generated_at": None} in client.get("/api/datasets").json()
     assert client.get("/api/datasets/test/meta").json()["times"] == ISO
+
+
+def test_links_carry_quality_flags(client):
+    props = {f["properties"]["id"]: f["properties"] for f in client.get("/api/datasets/test/links").json()["features"]}
+    assert (props["10001"]["excluded"], props["10001"]["exclude_reason"]) == (False, None)
+    assert (props["10002"]["excluded"], props["10002"]["exclude_reason"]) == (True, "too short")
 
 
 def test_link_rain_at_nearest_time(client):

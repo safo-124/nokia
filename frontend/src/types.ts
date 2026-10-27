@@ -40,12 +40,28 @@ export interface Meta extends DatasetSummary {
   wet_dry_method: "std" | "ml";
   wet_dry_scores: { rolling_std: WetDryScore; ml: WetDryScore } | null;
   nowcast?: { skill: NowcastSkill[]; warnings?: WarningPerformance | null };
+  quality?: QualitySummary;
 }
 
 export type Links = FeatureCollection<
   LineString,
-  { id: string; length_km: number; frequency_ghz: number; polarization: string }
+  {
+    id: string;
+    length_km: number;
+    frequency_ghz: number;
+    polarization: string;
+    /** Failed a quality check; its rain is left out of the map */
+    excluded: boolean;
+    exclude_reason: string | null;
+  }
 >;
+
+export interface QualitySummary {
+  links: number;
+  excluded: number;
+  by_reason: Record<string, number>;
+  readings_removed: number;
+}
 export type Gauges = FeatureCollection<Point, { id: string }>;
 export type Hotspots = FeatureCollection<Point, { id: string; name: string; vulnerability: number }>;
 

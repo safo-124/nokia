@@ -92,7 +92,15 @@ function StormBadge({ grid }: { grid: GridFrame }) {
   );
 }
 
-function Legend({ showRisk }: { showRisk: boolean }) {
+function LineSwatch({ color, dashed }: { color: string; dashed?: boolean }) {
+  return (
+    <svg width="22" height="6" aria-hidden>
+      <line x1="1" y1="3" x2="21" y2="3" stroke={color} strokeWidth="2.5" strokeDasharray={dashed ? "4 4" : undefined} />
+    </svg>
+  );
+}
+
+function Legend({ showRisk, showExcluded, lineColor }: { showRisk: boolean; showExcluded: boolean; lineColor: string }) {
   return (
     <div className="absolute bottom-6 left-3 z-[1000] rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] shadow-sm">
       <div className="mb-1 font-medium text-[var(--ink)]">Rain rate (mm/h)</div>
@@ -103,6 +111,16 @@ function Legend({ showRisk }: { showRisk: boolean }) {
             <span className="tabular mt-0.5">{bound}</span>
           </div>
         ))}
+      </div>
+      <div className="mt-2 flex gap-3">
+        <span className="flex items-center gap-1">
+          <LineSwatch color={lineColor} /> Dry link
+        </span>
+        {showExcluded && (
+          <span className="flex items-center gap-1">
+            <LineSwatch color={lineColor} dashed /> Left out (quality)
+          </span>
+        )}
       </div>
       {showRisk && (
         <div className="mt-2 flex gap-3">
@@ -157,6 +175,11 @@ export default function RainMap({
     [risk],
   );
   const series = SERIES[dark ? "dark" : "light"];
+  // Excluded links first, so working links draw on top of them
+  const sortedLinks = useMemo(
+    () => [...(links?.features ?? [])].sort((a, b) => Number(b.properties.excluded) - Number(a.properties.excluded)),
+    [links],
+  );
 
   return (
     <div className="relative h-full w-full">
@@ -178,19 +201,23 @@ export default function RainMap({
             pathOptions={{ color: series.surface, weight: 5, opacity: 0.9, interactive: false }}
           />
         ))}
-        {links?.features.map((f) => {
-          const { id, frequency_ghz, length_km } = f.properties;
+        {sortedLinks.map((f) => {
+          const { id, frequency_ghz, length_km, excluded, exclude_reason } = f.properties;
           const rate = linkRain?.rain_rate[id];
           return (
             <Polyline
               key={id}
               positions={f.geometry.coordinates.map(toLatLng)}
-              pathOptions={{ color: rainColor(rate) ?? series.axis, weight: 2.5, opacity: 1 }}
+              pathOptions={
+                excluded
+                  ? { color: series.axis, weight: 2, opacity: 0.9, dashArray: "4 4" }
+                  : { color: rainColor(rate) ?? series.axis, weight: 2.5, opacity: 1 }
+              }
             >
               <Tooltip sticky>
                 <strong>Link {id}</strong> · {frequency_ghz} GHz · {length_km} km
                 <br />
-                {fmt(rate)}
+                {excluded ? `Left out of the map: ${exclude_reason}` : fmt(rate)}
               </Tooltip>
             </Polyline>
           );
@@ -260,7 +287,11 @@ export default function RainMap({
         })}
       </MapContainer>
       {grid && <StormBadge grid={grid} />}
-      <Legend showRisk={Boolean(hotspots)} />
+      <Legend
+        showRisk={Boolean(hotspots)}
+        showExcluded={sortedLinks.some((f) => f.properties.excluded)}
+        lineColor={series.axis}
+      />
     </div>
   );
 }

@@ -100,7 +100,10 @@ def meta(dataset: str):
 
 @app.get("/api/datasets/{dataset}/links")
 def links(dataset: str):
-    """Link geometry and radio metadata, as GeoJSON."""
+    """Link geometry, radio metadata and quality flags, as GeoJSON.
+
+    Excluded links failed a quality check; their rain is left out of the map.
+    """
     _meta(dataset)
     rows = query("SELECT * FROM links WHERE dataset = %s ORDER BY id", (dataset,))
     return _collection([
@@ -108,7 +111,8 @@ def links(dataset: str):
             "LineString",
             [[r["site_0_lon"], r["site_0_lat"]], [r["site_1_lon"], r["site_1_lat"]]],
             {"id": r["id"], "length_km": round(r["length_km"], 2),
-             "frequency_ghz": round(r["frequency_ghz"], 1), "polarization": r["polarization"]},
+             "frequency_ghz": round(r["frequency_ghz"], 1), "polarization": r["polarization"],
+             "excluded": r["excluded"], "exclude_reason": r["exclude_reason"]},
         )
         for r in rows
     ])

@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS links (
     length_km      real NOT NULL,
     frequency_ghz  real NOT NULL,
     polarization   text NOT NULL,
+    excluded        boolean NOT NULL DEFAULT false,   -- failed a quality check (pipeline/s2r/quality.py)
+    exclude_reason  text,                             -- why, in plain language
     PRIMARY KEY (dataset, id)
 );
 
@@ -101,7 +103,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS alerts_dataset_time ON alerts (dataset, time);
 
--- Databases created before the nowcast existed
+-- Databases created before the nowcast and quality checks existed
+ALTER TABLE links ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
+ALTER TABLE links ADD COLUMN IF NOT EXISTS exclude_reason text;
 ALTER TABLE rain_grid ADD COLUMN IF NOT EXISTS motion_dy real NOT NULL DEFAULT 0;
 ALTER TABLE rain_grid ADD COLUMN IF NOT EXISTS motion_dx real NOT NULL DEFAULT 0;
 ALTER TABLE rain_grid ADD COLUMN IF NOT EXISTS speed_kmh real NOT NULL DEFAULT 0;

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import data, db, flood, interpolate, nowcast, rain, wetdry
+from . import data, db, flood, interpolate, nowcast, quality, rain, wetdry
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_HOTSPOTS = {"synthetic": DATA_DIR / "hotspots" / "accra.geojson"}
@@ -61,6 +61,13 @@ def main(argv=None):
     r_link = rain.link_rain_rate(cmls)
     wet_link = cmls.wet.any("sublink_id")
 
+    print("Checking link quality")
+    link_quality = quality.check_links(cmls, r_link)
+    r_link, spikes = quality.apply(r_link, link_quality)
+    quality_meta = quality.summary(link_quality, spikes)
+    print(f"  excluded {quality_meta['excluded']} of {quality_meta['links']} links "
+          f"{quality_meta['by_reason']}, removed {spikes} impossible readings")
+
     print("Interpolating rainfall map")
     mid_lat = ((cmls.site_0_lat + cmls.site_1_lat) / 2).values
     mid_lon = ((cmls.site_0_lon + cmls.site_1_lon) / 2).values
@@ -97,6 +104,7 @@ def main(argv=None):
         "wet_dry_scores": scores,
         "has_flood_risk": hotspots is not None,
         "nowcast": nowcast_meta,
+        "quality": quality_meta,
         "generated_at": datetime.now(timezone.utc).strftime(db.TIME_FORMAT),
     }
     dataset = args.dataset or args.source
@@ -107,6 +115,7 @@ def main(argv=None):
             dataset,
             meta=meta,
             cmls=cmls,
+            link_quality=link_quality,
             r_link=r_link,
             wet_link=wet_link,
             gauges=gauges,

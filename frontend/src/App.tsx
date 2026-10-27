@@ -68,6 +68,32 @@ function NowcastScores({ nowcast }: { nowcast: Meta["nowcast"] }) {
   );
 }
 
+function QualityNote({ quality }: { quality: Meta["quality"] }) {
+  if (!quality) return <p className="text-sm text-[var(--muted)]">Re-run the pipeline to add quality checks.</p>;
+  const reasons = Object.entries(quality.by_reason);
+  return (
+    <div className="space-y-1 text-sm">
+      <p>
+        <span className="tabular">{quality.excluded}</span> of <span className="tabular">{quality.links}</span> links
+        left out of the map{reasons.length > 0 && ":"}
+      </p>
+      {reasons.length > 0 && (
+        <ul className="tabular list-disc pl-5 text-[var(--ink-2)]">
+          {reasons.map(([reason, n]) => (
+            <li key={reason}>
+              {n} {reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {quality.readings_removed > 0 && (
+        <p className="text-[var(--ink-2)]">{quality.readings_removed} impossible readings removed from other links.</p>
+      )}
+      <p className="text-xs text-[var(--muted)]">Hover a dashed grey link to see why it was left out.</p>
+    </div>
+  );
+}
+
 function WetDryScores({ scores }: { scores: Meta["wet_dry_scores"] }) {
   if (!scores) return <p className="text-sm text-[var(--muted)]">No reference data to score against.</p>;
   const rows: [string, WetDryScore][] = [
@@ -258,6 +284,9 @@ export default function App() {
           </Section>
           <Section title="Wet/dry classification (held-out links)">
             <WetDryScores scores={meta.wet_dry_scores} />
+          </Section>
+          <Section title="Data quality">
+            <QualityNote quality={meta.quality} />
           </Section>
         </aside>
       </div>
