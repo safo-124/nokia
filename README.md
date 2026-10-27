@@ -59,13 +59,13 @@ cd frontend && npm run typecheck
 ## Pipeline
 
 ```bash
-python -m s2r.run [--source synthetic|openmrg] [--dataset NAME] [--wet-dry std|ml] [--start ISO --end ISO] [--hotspots FILE]
+python -m s2r.run [--source synthetic|openmrg] [--dataset NAME] [--wet-dry auto|std|ml] [--start ISO --end ISO] [--hotspots FILE]
 ```
 
 | Step | Module | What it does |
 |---|---|---|
 | Load | `s2r/data.py`, `s2r/synthetic.py` | Links as xarray (`cml_id`, `sublink_id`, `time`) with `tsl`, `rsl`, plus gauges. `R_ref` is reference rain along each link (synthetic truth, or radar for OpenMRG) |
-| Wet/dry | `s2r/wetdry.py` | `std`: rolling standard deviation rule. `ml`: gradient-boosted classifier on signal features, trained and scored on held-out links |
+| Wet/dry | `s2r/wetdry.py` | `std`: rolling standard deviation rule. `ml`: gradient-boosted classifier on the link's own signal plus what its 4, 8 and 16 nearest links are doing, trained and scored on held-out links. `auto` (default) uses `ml` when there is reference rain to train on |
 | Rain rate | `s2r/rain.py` | pycomlink: constant baseline, wet antenna correction (Schleiss 2013), ITU-R P.838 k-R power law |
 | Quality | `s2r/quality.py` | Leaves out links with no data, links under 0.5 km, links noisier in dry weather than the wet/dry threshold, and links with far more rain than their neighbours; drops single readings over 200 mm/h. Shown dashed grey on the map with the reason |
 | Map | `s2r/interpolate.py` | Inverse distance weighting from link midpoints onto a 0.5 km grid |
@@ -90,27 +90,41 @@ SELECT cml_id, max(rain_rate) FROM link_rain WHERE dataset = 'openmrg' GROUP BY 
 
 ### Results so far
 
-| Data | Wet/dry MCC, rule / AI | Gauges |
+| Data | Wet/dry MCC, rule / AI | Gauges (15 min means) |
 |---|---|---|
-| Synthetic Accra | 0.71 / 0.97 | correlation 0.94 to 1.00 at all 6 gauges (15 min) |
-| OpenMRG Gothenburg | 0.35 / 0.47 | correlation 0.85 to 0.99 at 7 of 10 gauges; 0.37 to 0.69 at the other 3 |
+| Synthetic Accra | 0.71 / 0.99 | correlation 0.94 to 1.00 at all 6 gauges |
+| OpenMRG Gothenburg | 0.35 / 0.62 | mean correlation 0.82; summed gap in event totals 26.2 mm over 10 gauges |
 
 The synthetic numbers only show the pipeline is wired correctly. The OpenMRG numbers are the ones to quote.
+MCC is scored on links the model never trained on (half the network), against radar for OpenMRG.
 
-**Quality checks** leave out 35 of 364 OpenMRG links (25 under 0.5 km, 10 with no data) and the 7 deliberately
-noisy synthetic links. On OpenMRG this cuts the summed gap between estimated and measured event totals at the
-10 gauges from 36.5 to 29.8 mm (18%), with the same mean correlation (0.81). The three weak gauges are not
-fixed by this: each has working links within about 1 km, and their rain is under-estimated rather than noisy.
+How OpenMRG got there, one change at a time (gauges: mean correlation / summed gap in event totals):
+
+| Step | Wet/dry MCC | Gauges |
+|---|---|---|
+| Rolling std rule only | 0.35 | 0.81 / 36.5 mm |
+| + quality checks (35 links left out: 25 under 0.5 km, 10 no data) | 0.35 | 0.81 / 29.8 mm |
+| + AI wet/dry with the link's own signal | 0.47 | not used for the map |
+| + what nearby links are doing (3 distances), 30 min and 3 h context, 11 min smoothing | 0.62 | 0.80 / 37.6 mm |
+| + wet periods widened by 30 min before the rain estimate | 0.62 | 0.82 / 26.2 mm |
+
+The last step matters: the classifier marks rain from its onset, so the dry baseline was taken while the signal
+was already dropping and rain was under-counted (Chalmers: 9.9 mm estimated, 25.1 mm measured; 26.0 mm after).
+Over three different train/test splits the neighbour features raised MCC from 0.475 to 0.620 on average.
+The three weak gauges (Askim, Jarn, Torsl) stay weak: each has working links within about 1 km, and their rain is
+under-estimated rather than noisy.
 
 **Nowcast**, critical success index for rain above 1 mm/h (higher is better), nowcast / rain stays put:
 
 | Data | +15 min | +30 min | +60 min | Early warnings |
 |---|---|---|---|---|
-| Synthetic Accra | 0.87 / 0.84 | 0.79 / 0.70 | 0.53 / 0.45 | 14 of 14 came true, median 32 min ahead (at least 21), no false alarms or misses |
-| OpenMRG Gothenburg | 0.48 / 0.44 | 0.37 / 0.26 | 0.25 / 0.14 | no hotspots |
+| Synthetic Accra | 0.93 / 0.89 | 0.85 / 0.79 | 0.53 / 0.58 | 14 of 14 came true, median 30 min ahead (at least 21), no false alarms or misses |
+| OpenMRG Gothenburg | 0.51 / 0.44 | 0.41 / 0.28 | 0.29 / 0.15 | no hotspots |
 
-On real data the nowcast gets 42% more of the rain right at +30 min and almost twice as much at +60 min.
-The synthetic warnings come from a clean, steadily moving storm, so treat 32 minutes as the best case.
+On real data the nowcast gets about 50% more of the rain right at +30 min and almost twice as much at +60 min.
+The synthetic warnings come from a clean, steadily moving storm, so treat 30 minutes as the best case. At +60 min
+on the synthetic storm the nowcast now loses to "rain stays put": the cleaner AI rain field makes persistence
+stronger, while the motion estimate is still too fast (about 21 km/h against 12) for the storm's first half hour.
 
 ## API
 
@@ -142,8 +156,13 @@ Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dat
 
 - Hotspot coordinates in Accra are approximate and vulnerability is a placeholder 1.0; flood thresholds are demo assumptions,
   not GMet or NADMO warning levels.
-- Quality thresholds (0.5 km, 0.8 dB, 4x neighbours, 200 mm/h) were picked by looking at these two datasets, not
-  taken from the literature or tuned on other networks.
+- Quality thresholds (0.5 km, 0.8 dB, 4x neighbours, 200 mm/h) and the 30 min wet widening were picked by looking
+  at these two datasets, partly against the same gauges used to score them, not taken from the literature.
+- Wet/dry features use centred time windows, so they see up to 3 hours ahead. Fine for replaying a storm; a live
+  system needs trailing windows. Tested on OpenMRG: MCC 0.53 with trailing windows (0.44 for the old features), so
+  the neighbour features still help.
+- For Ghana there is no radar to train on. The model would have to be trained elsewhere (OpenMRG) or on GMet gauges,
+  and its transfer to tropical rain and a different network is untested.
 - The nowcast moves the whole map with one motion vector and keeps rain intensity fixed: no growth, decay or new cells,
   and nothing is known about rain that is still outside the network. While a storm enters the map the direction wobbles
   (the synthetic storm shows north-west for a few minutes before settling on west).

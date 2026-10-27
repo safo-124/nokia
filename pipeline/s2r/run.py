@@ -2,7 +2,7 @@
 
     python -m s2r.run                                  # synthetic Accra storm
     python -m s2r.run --source openmrg                 # real Gothenburg data
-    python -m s2r.run --source openmrg --wet-dry ml --dataset openmrg-28jul \\
+    python -m s2r.run --source openmrg --wet-dry std --dataset openmrg-28jul \\
         --start 2015-07-28T10:00 --end 2015-07-28T18:00
 """
 
@@ -23,8 +23,9 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Signal-to-Rain processing pipeline")
     p.add_argument("--source", choices=["synthetic", "openmrg"], default="synthetic")
     p.add_argument("--dataset", help="Name to store the results under (default: the source)")
-    p.add_argument("--wet-dry", choices=["std", "ml"], default="std",
-                   help="std: rolling standard deviation rule; ml: trained classifier")
+    p.add_argument("--wet-dry", choices=["auto", "std", "ml"], default="auto",
+                   help="std: rolling standard deviation rule; ml: trained classifier; "
+                        "auto: ml when there is reference rain to train on, else std")
     p.add_argument("--start", help="Start of the time window (OpenMRG only)")
     p.add_argument("--end", help="End of the time window (OpenMRG only)")
     p.add_argument("--hotspots", type=Path, help="GeoJSON of flood hotspots")
@@ -49,12 +50,16 @@ def main(argv=None):
         print("Scoring wet/dry methods against the reference (links held out)")
         model, scores = wetdry.evaluate(trsl, cmls.R_ref)
         print("  " + json.dumps(scores))
-    if args.wet_dry == "ml":
+    method = args.wet_dry
+    if method == "auto":
+        method = "ml" if "R_ref" in cmls else "std"
+    if method == "ml":
         if "R_ref" not in cmls:
             raise SystemExit("--wet-dry ml needs a reference rain rate to train on")
-        wet = wetdry.predict(model, trsl)
+        wet = wetdry.widen(wetdry.predict(model, trsl))
     else:
         wet = wetdry.rolling_std(trsl)
+    print(f"  using {method} for wet/dry")
 
     print("Estimating rain rate per link")
     cmls = rain.estimate_rain_rate(cmls, wet)
@@ -100,7 +105,7 @@ def main(argv=None):
         "bounds": [float(lat.min()), float(lat.max()), float(lon.min()), float(lon.max())],
         "n_links": int(cmls.sizes["cml_id"]),
         "n_gauges": int(gauges.sizes["id"]),
-        "wet_dry_method": args.wet_dry,
+        "wet_dry_method": method,
         "wet_dry_scores": scores,
         "has_flood_risk": hotspots is not None,
         "nowcast": nowcast_meta,

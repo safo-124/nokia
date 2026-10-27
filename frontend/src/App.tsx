@@ -94,31 +94,39 @@ function QualityNote({ quality }: { quality: Meta["quality"] }) {
   );
 }
 
-function WetDryScores({ scores }: { scores: Meta["wet_dry_scores"] }) {
-  if (!scores) return <p className="text-sm text-[var(--muted)]">No reference data to score against.</p>;
+function WetDryScores({ scores, method }: { scores: Meta["wet_dry_scores"]; method: Meta["wet_dry_method"] }) {
+  const used = method === "ml" ? "AI classifier" : "rolling std rule";
+  if (!scores) {
+    return <p className="text-sm text-[var(--muted)]">No reference data to score against. The map uses the {used}.</p>;
+  }
   const rows: [string, WetDryScore][] = [
     ["Rolling std rule", scores.rolling_std],
     ["AI classifier", scores.ml],
   ];
   return (
-    <table className="tabular w-full text-sm">
-      <thead className="text-left text-xs text-[var(--muted)]">
-        <tr>
-          <th className="font-normal">Method</th>
-          <th className="font-normal">Accuracy</th>
-          <th className="font-normal">MCC</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(([name, s]) => (
-          <tr key={name}>
-            <td>{name}</td>
-            <td>{s.accuracy}</td>
-            <td>{s.mcc}</td>
+    <>
+      <table className="tabular w-full text-sm">
+        <thead className="text-left text-xs text-[var(--muted)]">
+          <tr>
+            <th className="font-normal">Method</th>
+            <th className="font-normal">Accuracy</th>
+            <th className="font-normal">MCC</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map(([name, s]) => (
+            <tr key={name}>
+              <td>{name}</td>
+              <td>{s.accuracy}</td>
+              <td>{s.mcc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-2 text-xs text-[var(--muted)]">
+        The AI classifier also looks at what nearby links are doing. The rain map uses the {used}.
+      </p>
+    </>
   );
 }
 
@@ -283,7 +291,7 @@ export default function App() {
             <GaugeChart dataset={dataset} gaugeId={selectedGauge} currentTime={currentTime} dark={dark} />
           </Section>
           <Section title="Wet/dry classification (held-out links)">
-            <WetDryScores scores={meta.wet_dry_scores} />
+            <WetDryScores scores={meta.wet_dry_scores} method={meta.wet_dry_method} />
           </Section>
           <Section title="Data quality">
             <QualityNote quality={meta.quality} />
