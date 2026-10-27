@@ -1,0 +1,4 @@
+pycomlink==0.6.0
+poligrain==0.3.1
+scikit-learn>=1.5
+pytest>=8

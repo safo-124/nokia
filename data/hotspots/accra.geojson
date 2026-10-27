@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "description": "Flood-prone neighbourhoods in Accra for the demo. Coordinates are approximate centroids and vulnerability is a placeholder (1.0); replace both with NADMO / city assembly data.",
+  "features": [
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2148, 5.5701]}, "properties": {"id": "circle", "name": "Kwame Nkrumah Circle", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2330, 5.5655]}, "properties": {"id": "kaneshie", "name": "Kaneshie", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2080, 5.5600]}, "properties": {"id": "adabraka", "name": "Adabraka", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2170, 5.5960]}, "properties": {"id": "alajo", "name": "Alajo", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2020, 5.6100]}, "properties": {"id": "dzorwulu", "name": "Dzorwulu", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2260, 5.5490]}, "properties": {"id": "agbogbloshie", "name": "Agbogbloshie", "vulnerability": 1.0}},
+    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-0.2250, 5.5600]}, "properties": {"id": "abossey-okai", "name": "Abossey Okai", "vulnerability": 1.0}}
+  ]
+}
