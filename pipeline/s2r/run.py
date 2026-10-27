@@ -1,8 +1,9 @@
-"""Run the whole pipeline and write files for the backend.
+"""Run the whole pipeline and store the results in PostgreSQL.
 
     python -m s2r.run                                  # synthetic Accra storm
     python -m s2r.run --source openmrg                 # real Gothenburg data
-    python -m s2r.run --source openmrg --wet-dry ml --start 2015-07-28T10:00 --end 2015-07-28T18:00
+    python -m s2r.run --source openmrg --wet-dry ml --dataset openmrg-28jul \\
+        --start 2015-07-28T10:00 --end 2015-07-28T18:00
 """
 
 import argparse
@@ -12,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import data, export, flood, interpolate, rain, wetdry
+from . import data, db, flood, interpolate, rain, wetdry
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_HOTSPOTS = {"synthetic": DATA_DIR / "hotspots" / "accra.geojson"}
@@ -21,13 +22,13 @@ DEFAULT_HOTSPOTS = {"synthetic": DATA_DIR / "hotspots" / "accra.geojson"}
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Signal-to-Rain processing pipeline")
     p.add_argument("--source", choices=["synthetic", "openmrg"], default="synthetic")
+    p.add_argument("--dataset", help="Name to store the results under (default: the source)")
     p.add_argument("--wet-dry", choices=["std", "ml"], default="std",
                    help="std: rolling standard deviation rule; ml: trained classifier")
     p.add_argument("--start", help="Start of the time window (OpenMRG only)")
     p.add_argument("--end", help="End of the time window (OpenMRG only)")
     p.add_argument("--hotspots", type=Path, help="GeoJSON of flood hotspots")
     p.add_argument("--raw", type=Path, default=DATA_DIR / "raw")
-    p.add_argument("--out", type=Path, default=DATA_DIR / "processed")
     return p.parse_args(argv)
 
 
@@ -87,22 +88,26 @@ def main(argv=None):
         "wet_dry_method": args.wet_dry,
         "wet_dry_scores": scores,
         "has_flood_risk": hotspots is not None,
-        "generated_at": datetime.now(timezone.utc).strftime(export.TIME_FORMAT),
+        "generated_at": datetime.now(timezone.utc).strftime(db.TIME_FORMAT),
     }
-    export.write_outputs(
-        args.out,
-        meta=meta,
-        cmls=cmls,
-        r_link=r_link,
-        wet_link=wet_link,
-        gauges=gauges,
-        gauge_estimate=gauge_estimate,
-        grid=grid,
-        hotspots=hotspots,
-        risk=risk,
-        alert_list=alert_list,
-    )
-    print(f"Wrote {args.out}")
+    dataset = args.dataset or args.source
+    print(f"Saving dataset '{dataset}' to PostgreSQL")
+    with db.connect() as conn:
+        db.save(
+            conn,
+            dataset,
+            meta=meta,
+            cmls=cmls,
+            r_link=r_link,
+            wet_link=wet_link,
+            gauges=gauges,
+            gauge_estimate=gauge_estimate,
+            grid=grid,
+            hotspots=hotspots,
+            risk=risk,
+            alert_list=alert_list,
+        )
+    print("Done")
 
 
 if __name__ == "__main__":

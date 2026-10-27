@@ -1,82 +1,113 @@
-import json
+"""API tests against a real PostgreSQL test database.
+
+Uses TEST_DATABASE_URL (default: local signal_to_rain_test, created if missing)
+and skips everything when PostgreSQL isn't reachable.
+"""
+
+import os
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
-import pandas as pd
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.types.json import Jsonb
 
-from app import main
-from app.store import Store
+from app import db
+from app.main import app
 
-TIMES = ["2026-06-15T12:00:00", "2026-06-15T12:01:00", "2026-06-15T12:02:00"]
-
-
-def _write(path, obj):
-    path.write_text(json.dumps(obj), encoding="utf-8")
-
-
-def _point(pid, lon, lat, **props):
-    return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]},
-            "properties": {"id": pid, **props}}
+TEST_URL = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/signal_to_rain_test"
+)
+SCHEMA = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
+T = [datetime(2026, 6, 15, 12, m) for m in range(3)]
+ISO = [t.strftime("%Y-%m-%dT%H:%M:%S") for t in T]
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    """A tiny pipeline output: two links, one gauge, one hotspot, three time steps."""
-    _write(tmp_path / "meta.json", {"source": "test", "times": TIMES, "has_flood_risk": True})
-    _write(tmp_path / "links.geojson", {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [[0, 0], [0.01, 0.01]]},
-         "properties": {"id": cml}} for cml in ("10001", "10002")]})
-    _write(tmp_path / "gauges.geojson", {"type": "FeatureCollection", "features": [_point("G1", 0, 0)]})
-    _write(tmp_path / "hotspots.geojson",
-           {"type": "FeatureCollection", "features": [_point("h1", 0, 0, name="Here")]})
-    _write(tmp_path / "alerts.json", [{"time": TIMES[2], "hotspot_id": "h1", "level": "medium"}])
-    pd.DataFrame({"time": TIMES * 2, "cml_id": ["10001"] * 3 + ["10002"] * 3,
-                  "rain_rate": [0, 5, 10, 0, 0, np.nan], "wet": [0, 1, 1, 0, 0, 0]}
-                 ).to_csv(tmp_path / "link_rain.csv", index=False)
-    pd.DataFrame({"time": TIMES, "gauge_id": "G1", "gauge": [0, 4, 8], "estimate": [0, 5, 9]}
-                 ).to_csv(tmp_path / "gauge_rain.csv", index=False)
-    pd.DataFrame({"time": TIMES, "hotspot_id": "h1", "rain_rate": [0, 5, 10], "acc_1h": [0, 0.1, 0.2],
-                  "acc_3h": [0, 0.1, 0.2], "risk": [0, 0, 0.6], "level": ["low", "low", "medium"]}
-                 ).to_csv(tmp_path / "flood_risk.csv", index=False)
-    rain = np.zeros((3, 2, 2), dtype="float32")
-    rain[1, 0, 0] = np.nan
-    np.savez(tmp_path / "grid.npz", lat=np.array([0.0, 0.01]), lon=np.array([0.0, 0.01]), rain_rate=rain)
+def _connect():
+    try:
+        return psycopg.connect(TEST_URL, autocommit=True)
+    except psycopg.OperationalError as e:
+        if "does not exist" not in str(e):
+            pytest.skip(f"PostgreSQL not reachable: {e}")
+    name = conninfo_to_dict(TEST_URL)["dbname"]
+    with psycopg.connect(make_conninfo(TEST_URL, dbname="postgres"), autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    return psycopg.connect(TEST_URL, autocommit=True)
 
-    monkeypatch.setattr(main, "store", Store(tmp_path))
-    return TestClient(main.app)
+
+@pytest.fixture(scope="module")
+def client():
+    """A tiny dataset 'test': two links, one gauge, one hotspot, three time steps."""
+    with _connect() as conn:
+        conn.execute(SCHEMA.read_text(encoding="utf-8"))
+        conn.execute("DELETE FROM datasets WHERE id = 'test'")
+        conn.execute(
+            "INSERT INTO datasets (id, meta, grid_lat, grid_lon) VALUES ('test', %s, %s, %s)",
+            (Jsonb({"source": "test", "region": "Nowhere", "has_flood_risk": True}), [0.0, 0.01], [0.0, 0.01]),
+        )
+        for cml in ("10001", "10002"):
+            conn.execute("INSERT INTO links VALUES ('test', %s, 0, 0, 0.01, 0.01, 1.5, 23, 'V')", (cml,))
+        for t, a, b in zip(T, [0, 5, 10], [0, 0, None]):
+            conn.execute("INSERT INTO link_rain VALUES ('test', %s, '10001', %s, true)", (t, a))
+            conn.execute("INSERT INTO link_rain VALUES ('test', %s, '10002', %s, false)", (t, b))
+            frame = np.zeros((2, 2), dtype="<f4")
+            if t == T[1]:
+                frame[0, 0] = np.nan
+            conn.execute("INSERT INTO rain_grid VALUES ('test', %s, %s)", (t, frame.tobytes()))
+        conn.execute("INSERT INTO gauges VALUES ('test', 'G1', 0, 0)")
+        for t, g, e in zip(T, [0, 4, 8], [0, 5, 9]):
+            conn.execute("INSERT INTO gauge_rain VALUES ('test', 'G1', %s, %s, %s)", (t, g, e))
+        conn.execute("INSERT INTO hotspots VALUES ('test', 'h1', 'Here', 1.0, 0, 0)")
+        for t, level in zip(T, ["low", "low", "medium"]):
+            conn.execute("INSERT INTO flood_risk VALUES ('test', %s, 'h1', 1, 1, 1, 0.5, %s)", (t, level))
+        conn.execute("INSERT INTO alerts VALUES ('test', %s, 'h1', 'Here', 'medium', 16, 'Watch out')", (T[2],))
+
+    db.configure(TEST_URL)
+    yield TestClient(app)
+    db.configure(db.database_url())
+
+
+def test_datasets_and_meta(client):
+    assert {"id": "test", "source": "test", "region": "Nowhere", "n_links": None,
+            "has_flood_risk": True, "generated_at": None} in client.get("/api/datasets").json()
+    assert client.get("/api/datasets/test/meta").json()["times"] == ISO
 
 
 def test_link_rain_at_nearest_time(client):
-    body = client.get("/api/links/rain", params={"time": "2026-06-15T12:01:10"}).json()
-    assert body["time"] == TIMES[1]
+    body = client.get("/api/datasets/test/links/rain", params={"time": "2026-06-15T12:01:10"}).json()
+    assert body["time"] == ISO[1]
     assert body["rain_rate"] == {"10001": 5.0, "10002": 0.0}
 
 
-def test_numeric_looking_link_ids_stay_strings(client):
-    body = client.get("/api/links/10002/series").json()
-    assert body["rain_rate"] == [0.0, 0.0, None]
+def test_link_series_keeps_nulls(client):
+    assert client.get("/api/datasets/test/links/10002/series").json()["rain_rate"] == [0.0, 0.0, None]
 
 
 def test_grid_nan_becomes_null(client):
-    body = client.get("/api/rainfall/grid", params={"time": TIMES[1]}).json()
+    body = client.get("/api/datasets/test/rainfall/grid", params={"time": ISO[1]}).json()
     assert body["rain_rate"][0][0] is None
+    assert body["rain_rate"][1][1] == 0.0
 
 
 def test_gauge_comparison_and_alerts(client):
-    body = client.get("/api/gauges/G1/comparison", params={"resample": "1min"}).json()
+    body = client.get("/api/datasets/test/gauges/G1/comparison", params={"minutes": 1}).json()
     assert body["estimate"] == [0.0, 5.0, 9.0]
-    assert client.get("/api/alerts", params={"until": TIMES[1]}).json() == []
-    assert len(client.get("/api/alerts").json()) == 1
+    assert body["stats"]["correlation"] > 0.99
+    assert client.get("/api/datasets/test/alerts", params={"until": ISO[1]}).json() == []
+    assert client.get("/api/datasets/test/alerts").json()[0]["message"] == "Watch out"
 
 
-def test_unknown_ids_are_404(client):
-    assert client.get("/api/links/nope/series").status_code == 404
-    assert client.get("/api/gauges/nope/comparison").status_code == 404
+def test_flood_risk_at_time(client):
+    body = client.get("/api/datasets/test/flood-risk", params={"time": ISO[2]}).json()
+    assert body["hotspots"][0]["level"] == "medium"
 
 
-def test_missing_data_is_503(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "store", Store(tmp_path))
-    c = TestClient(main.app)
-    assert c.get("/api/meta").status_code == 503
-    assert c.get("/api/health").json() == {"status": "ok", "data": False}
+def test_unknown_things_are_404(client):
+    assert client.get("/api/datasets/nope/meta").status_code == 404
+    assert client.get("/api/datasets/nope/rainfall/grid").status_code == 404
+    assert client.get("/api/datasets/test/links/nope/series").status_code == 404
+    assert client.get("/api/datasets/test/gauges/nope/comparison").status_code == 404

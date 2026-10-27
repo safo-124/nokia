@@ -1,0 +1,78 @@
+// Shapes of the API responses (see backend/app/main.py)
+import type { FeatureCollection, LineString, Point } from "geojson";
+
+export type Level = "low" | "medium" | "high";
+
+export interface WetDryScore {
+  accuracy: number;
+  mcc: number;
+}
+
+export interface DatasetSummary {
+  id: string;
+  source: string;
+  region: string;
+  n_links: number;
+  has_flood_risk: boolean;
+  generated_at: string;
+}
+
+export interface Meta extends DatasetSummary {
+  bounds: [latMin: number, latMax: number, lonMin: number, lonMax: number];
+  times: string[];
+  n_gauges: number;
+  wet_dry_method: "std" | "ml";
+  wet_dry_scores: { rolling_std: WetDryScore; ml: WetDryScore } | null;
+}
+
+export type Links = FeatureCollection<
+  LineString,
+  { id: string; length_km: number; frequency_ghz: number; polarization: string }
+>;
+export type Gauges = FeatureCollection<Point, { id: string }>;
+export type Hotspots = FeatureCollection<Point, { id: string; name: string; vulnerability: number }>;
+
+export interface LinkRain {
+  time: string;
+  rain_rate: Record<string, number | null>;
+}
+
+export interface GridFrame {
+  time: string;
+  lat: number[];
+  lon: number[];
+  /** Rows run south to north; null where no link is close enough */
+  rain_rate: (number | null)[][];
+}
+
+export interface GaugeComparison {
+  gauge_id: string;
+  minutes: number;
+  time: string[];
+  gauge: (number | null)[];
+  estimate: (number | null)[];
+  stats: { correlation: number | null; total_gauge_mm: number; total_estimate_mm: number };
+}
+
+export interface HotspotRisk {
+  hotspot_id: string;
+  rain_rate: number;
+  acc_1h: number;
+  acc_3h: number;
+  risk: number;
+  level: Level;
+}
+
+export interface FloodRisk {
+  time: string;
+  hotspots: HotspotRisk[];
+}
+
+export interface Alert {
+  time: string;
+  hotspot_id: string;
+  name: string;
+  level: Level;
+  acc_1h: number;
+  message: string;
+}

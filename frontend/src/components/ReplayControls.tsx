@@ -1,4 +1,12 @@
-export default function ReplayControls({ times, index, onIndex, playing, onPlaying }) {
+interface Props {
+  times: string[];
+  index: number;
+  onIndex: (index: number) => void;
+  playing: boolean;
+  onPlaying: (playing: boolean) => void;
+}
+
+export default function ReplayControls({ times, index, onIndex, playing, onPlaying }: Props) {
   const atEnd = index >= times.length - 1;
   return (
     <div className="flex items-center gap-3 border-t border-[var(--border)] bg-[var(--surface)] px-4 py-3">

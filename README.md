@@ -4,63 +4,62 @@ Turning mobile networks into flood early warning sensors. Nokia Student Network 
 See [Signal-to-Rain_Product_Document.pdf](Signal-to-Rain_Product_Document.pdf) for the idea and business case.
 
 Rain weakens the microwave links between cell towers. The pipeline turns that signal loss into rain rates per
-link, a rainfall map and flood risk per neighbourhood; the web app replays the storm with alerts and checks the
-estimates against rain gauges.
+link, a rainfall map and flood risk per neighbourhood, and stores them in PostgreSQL. The web app replays the storm
+with alerts and checks the estimates against rain gauges.
 
 ```
-pipeline/   Python + pycomlink: signal levels -> wet/dry -> rain rate -> map -> flood risk   (signal processing & AI)
-backend/    FastAPI: serves the pipeline's output files                                       (backend)
-frontend/   React + Vite + Leaflet + Recharts + Tailwind: map, storm replay, gauge chart, alerts (web app)
-data/       hotspots/ is tracked; raw/ (downloads) and processed/ (pipeline output) are not
+pipeline/   Python + pycomlink: signal levels -> wet/dry -> rain rate -> map -> flood risk -> PostgreSQL  (signal processing & AI)
+backend/    FastAPI: reads PostgreSQL, serves JSON                                                     (backend)
+frontend/   React + TypeScript + Vite + Leaflet + Recharts + Tailwind: map, replay, gauge chart, alerts  (web app)
+db/         schema.sql, applied automatically by the pipeline
+data/       hotspots/ is tracked; raw/ (downloaded OpenMRG files) is not
 ```
 
-## Run it
+## Setup (once per laptop)
 
-### With Docker
-
-```bash
-docker compose up --build
-```
-
-Open http://localhost:5173. The pipeline runs once on the synthetic Accra storm, then the backend and web app start.
-For the real Gothenburg data (downloads about 28 MB the first time):
-
-```bash
-S2R_SOURCE=openmrg docker compose up --build
-```
-
-In PowerShell: `$env:S2R_SOURCE="openmrg"; docker compose up --build`.
-
-### Without Docker
-
-Needs Python 3.12+ and Node 20+. From the repo root (on macOS/Linux use `.venv/bin/python`):
+1. **PostgreSQL 14+** running locally. On Windows:
+   `winget install PostgreSQL.PostgreSQL.17 --override "--mode unattended --superpassword postgres"`.
+   The code connects to `postgresql://postgres:postgres@localhost:5432/signal_to_rain` unless `DATABASE_URL` is set,
+   and creates the `signal_to_rain` database on first run.
+2. **Python 3.12+** and **Node 20+**. From the repo root (on macOS/Linux use `.venv/bin/python`):
 
 ```bash
 python -m venv .venv
 .venv/Scripts/python -m pip install -r pipeline/requirements.txt -r backend/requirements.txt
-cd pipeline && ../.venv/Scripts/python -m s2r.run && cd ..
+cd frontend && npm install
+```
+
+## Run it
+
+```bash
+cd pipeline && ../.venv/Scripts/python -m s2r.run                   # synthetic Accra storm, about 20 s
+cd pipeline && ../.venv/Scripts/python -m s2r.run --source openmrg  # real Gothenburg data, about 1 min (downloads 28 MB once)
+```
+
+Each run is stored as a dataset (named after the source, or `--dataset NAME`); re-running replaces it. Then, in two terminals:
+
+```bash
 .venv/Scripts/python -m uvicorn app.main:app --app-dir backend --port 8000 --reload
 ```
 
-In a second terminal:
-
 ```bash
-cd frontend && npm install && npm run dev
+cd frontend && npm run dev
 ```
 
-Re-running the pipeline is picked up by the backend without a restart; reload the page.
+Open http://localhost:5173 and pick a dataset in the header. API docs are at http://localhost:8000/docs.
 
-### Tests
+### Checks
 
 ```bash
-cd pipeline && ../.venv/Scripts/python -m pytest -q
+cd pipeline && ../.venv/Scripts/python -m pytest -q    # needs PostgreSQL; uses database signal_to_rain_test
 cd backend && ../.venv/Scripts/python -m pytest -q
+cd frontend && npm run typecheck
 ```
 
 ## Pipeline
 
 ```bash
-python -m s2r.run [--source synthetic|openmrg] [--wet-dry std|ml] [--start ISO --end ISO] [--hotspots FILE] [--out DIR]
+python -m s2r.run [--source synthetic|openmrg] [--dataset NAME] [--wet-dry std|ml] [--start ISO --end ISO] [--hotspots FILE]
 ```
 
 | Step | Module | What it does |
@@ -70,7 +69,7 @@ python -m s2r.run [--source synthetic|openmrg] [--wet-dry std|ml] [--start ISO -
 | Rain rate | `s2r/rain.py` | pycomlink: constant baseline, wet antenna correction (Schleiss 2013), ITU-R P.838 k-R power law |
 | Map | `s2r/interpolate.py` | Inverse distance weighting from link midpoints onto a 0.5 km grid |
 | Flood risk | `s2r/flood.py` | Placeholder rule on 1 h / 3 h rain at each hotspot, plus SMS-style alerts when a level goes up |
-| Export | `s2r/export.py` | Writes the files below |
+| Store | `s2r/db.py` | Replaces the dataset in PostgreSQL in one transaction (bulk `COPY`) |
 
 **Data sources**
 - `synthetic`: a squall line crossing Accra from east to west over 79 synthetic links, 6 gauges and 7 flood hotspots
@@ -79,9 +78,13 @@ python -m s2r.run [--source synthetic|openmrg] [--wet-dry std|ml] [--start ISO -
   `poligrain`. The default window is the wettest night, 25 July 22:00 to 26 July 06:00. There are no hotspots for
   Gothenburg, so no flood risk or alerts.
 
-**Output contract** (`data/processed/`, read by the backend):
-`meta.json`, `links.geojson`, `link_rain.csv`, `gauges.geojson`, `gauge_rain.csv`, `grid.npz`, and with hotspots
-`hotspots.geojson`, `flood_risk.csv`, `alerts.json`. Column details are in `s2r/export.py`.
+**Tables** ([db/schema.sql](db/schema.sql)): `datasets` (one row per run, with meta as JSON), `links`, `link_rain`,
+`rain_grid` (one float32 frame per time step), `gauges`, `gauge_rain`, `hotspots`, `flood_risk`, `alerts`.
+Deleting a `datasets` row deletes everything in it. Handy for exploring:
+
+```sql
+SELECT cml_id, max(rain_rate) FROM link_rain WHERE dataset = 'openmrg' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+```
 
 ### Results so far
 
@@ -94,24 +97,25 @@ The synthetic numbers only show the pipeline is wired correctly. The OpenMRG num
 
 ## API
 
+Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dataset}/`.
+
 | Endpoint | Returns |
 |---|---|
-| `GET /api/meta` | source, region, bounds, time steps, wet/dry scores |
-| `GET /api/links` | link geometry (GeoJSON) |
-| `GET /api/links/rain?time=` | rain rate on every link at one time step |
-| `GET /api/links/{id}/series` | rain rate time series for one link |
-| `GET /api/rainfall/grid?time=` | rainfall map at one time step |
-| `GET /api/gauges`, `GET /api/gauges/{id}/comparison` | gauge locations; gauge vs link estimate, 15 min means |
-| `GET /api/hotspots`, `GET /api/flood-risk?time=` | hotspots; risk level per hotspot at one time step |
-| `GET /api/alerts?until=` | alerts issued up to a time |
+| `GET /api/datasets` | stored datasets |
+| `GET .../meta` | source, region, bounds, time steps, wet/dry scores |
+| `GET .../links`, `GET .../links/rain?time=`, `GET .../links/{id}/series` | link geometry (GeoJSON); rain on every link at one step; one link's time series |
+| `GET .../rainfall/grid?time=` | rainfall map at one time step |
+| `GET .../gauges`, `GET .../gauges/{id}/comparison?minutes=15` | gauge locations; gauge vs link estimate as N-minute means |
+| `GET .../hotspots`, `GET .../flood-risk?time=` | hotspots; risk per hotspot at one step, highest first |
+| `GET .../alerts?until=` | alerts issued up to a time |
 
-`time` is ISO 8601; the nearest available step is used. Interactive docs at http://localhost:8000/docs.
+`time` is ISO 8601; the nearest stored step is used.
 
 ## Hackathon plan
 
 | Hours | Plan | Status in this scaffold |
 |---|---|---|
-| 0 to 1 | Repo, Docker, load OpenMRG, pick a storm | Done; storm window picked from gauge totals. Docker files written but not yet tested |
+| 0 to 1 | Repo, load OpenMRG, pick a storm | Done; storm window picked from gauge totals |
 | 1 to 3 | Rain rate pipeline, wet/dry classifier | Working baseline; tune features, thresholds and the classifier |
 | 3 to 5 | FastAPI endpoints, React map with replay and charts | Working baseline; polish the UI |
 | 5 to 6 | Flood risk scoring, SMS alert panel, Ghana mock-up | Placeholder rule and alerts on synthetic Accra; replace with terrain/drainage model |
@@ -123,4 +127,4 @@ The synthetic numbers only show the pipeline is wired correctly. The OpenMRG num
   not GMet or NADMO warning levels.
 - A few OpenMRG links give implausible peaks (over 200 mm/h); there are no quality flags yet.
 - The map uses link midpoints for interpolation and fills the whole network bounding box.
-- Base map tiles come from tile.openstreetmap.org, which is fine for a demo but not for production traffic.
+- Base map tiles come from tile.openstreetmap.org and need internet at the venue.

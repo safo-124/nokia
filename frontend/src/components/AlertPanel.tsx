@@ -1,6 +1,13 @@
 import { RISK } from "../colors";
+import type { Alert } from "../types";
 
-export default function AlertPanel({ alerts, currentTime, hasFloodRisk }) {
+interface Props {
+  alerts: Alert[];
+  currentTime: string;
+  hasFloodRisk: boolean;
+}
+
+export default function AlertPanel({ alerts, currentTime, hasFloodRisk }: Props) {
   if (!hasFloodRisk) {
     return (
       <p className="text-sm text-[var(--muted)]">

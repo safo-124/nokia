@@ -1,9 +1,10 @@
-import json
+import os
 
 import numpy as np
+import psycopg
 import pytest
 
-from s2r import data, rain, run, wetdry
+from s2r import data, db, rain, run, wetdry
 
 
 @pytest.fixture(scope="module")
@@ -26,10 +27,26 @@ def test_ml_wet_dry_beats_rolling_std_on_synthetic(synthetic):
     assert scores["ml"]["mcc"] > scores["rolling_std"]["mcc"]
 
 
-def test_run_writes_all_outputs(tmp_path):
-    run.main(["--out", str(tmp_path)])
-    for name in ("meta.json", "links.geojson", "link_rain.csv", "gauges.geojson",
-                 "gauge_rain.csv", "grid.npz", "hotspots.geojson", "flood_risk.csv", "alerts.json"):
-        assert (tmp_path / name).exists(), name
-    meta = json.loads((tmp_path / "meta.json").read_text())
-    assert len(meta["times"]) == np.load(tmp_path / "grid.npz")["rain_rate"].shape[0]
+def test_run_saves_dataset(monkeypatch):
+    url = os.environ.get(
+        "TEST_DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/signal_to_rain_test"
+    )
+    try:
+        db.connect(url).close()
+    except psycopg.OperationalError as e:
+        pytest.skip(f"PostgreSQL not reachable: {e}")
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    run.main(["--dataset", "pytest-synthetic"])
+
+    with db.connect(url) as conn:
+        counts = {
+            table: conn.execute(
+                f"SELECT count(*) FROM {table} WHERE dataset = 'pytest-synthetic'"
+            ).fetchone()[0]
+            for table in ("links", "link_rain", "rain_grid", "gauges", "gauge_rain",
+                          "hotspots", "flood_risk", "alerts")
+        }
+        conn.execute("DELETE FROM datasets WHERE id = 'pytest-synthetic'")
+    assert all(counts.values()), counts
+    assert counts["link_rain"] == counts["links"] * counts["rain_grid"]
