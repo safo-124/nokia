@@ -146,6 +146,8 @@ interface Props {
   risk?: FloodRisk | null;
   selectedGauge: string | null;
   onSelectGauge: (id: string) => void;
+  selectedHotspot: string | null;
+  onSelectHotspot: (id: string) => void;
   dark: boolean;
 }
 
@@ -159,6 +161,8 @@ export default function RainMap({
   risk,
   selectedGauge,
   onSelectGauge,
+  selectedHotspot,
+  onSelectHotspot,
   dark,
 }: Props) {
   const bounds = useMemo<LatLngBoundsExpression>(
@@ -262,11 +266,17 @@ export default function RainMap({
               )}
               <CircleMarker
                 center={center}
-                radius={9}
-                pathOptions={{ color: "#0b0b0b", weight: 1, fillColor: level.color, fillOpacity: 0.95 }}
+                radius={id === selectedHotspot ? 11 : 9}
+                pathOptions={{
+                  color: id === selectedHotspot ? "#2a78d6" : "#0b0b0b",
+                  weight: id === selectedHotspot ? 3 : 1,
+                  fillColor: level.color,
+                  fillOpacity: 0.95,
+                }}
+                eventHandlers={{ click: () => onSelectHotspot(id) }}
               >
                 <Tooltip>
-                  <strong>{name}</strong> · {level.label} flood risk now
+                  <strong>{name}</strong> · {level.label} flood risk now (click for a resident's phone)
                   {r && (
                     <>
                       <br />

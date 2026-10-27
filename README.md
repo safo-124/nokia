@@ -48,6 +48,10 @@ cd frontend && npm run dev
 
 Open http://localhost:5173 and pick a dataset in the header. API docs are at http://localhost:8000/docs.
 
+For the demo, pick Accra and press **Play storm**. The phone at the top of the sidebar shows what a resident of the
+chosen neighbourhood receives by SMS, in English or Twi, with a lock-screen banner as each message arrives. Click a
+neighbourhood on the map to switch resident. The SMS wording lives in [frontend/src/sms.ts](frontend/src/sms.ts).
+
 ### Checks
 
 ```bash
@@ -161,6 +165,9 @@ Everything except `/api/health` and `/api/datasets` is under `/api/datasets/{dat
 - Wet/dry features use centred time windows, so they see up to 3 hours ahead. Fine for replaying a storm; a live
   system needs trailing windows. Tested on OpenMRG: MCC 0.53 with trailing windows (0.44 for the old features), so
   the neighbour features still help.
+- **The Twi SMS text is an AI-written draft.** Have a native Twi speaker check and correct it in
+  `frontend/src/sms.ts` before the demo. Twi letters ɛ and ɔ push SMS into Unicode (70 characters per SMS), so Twi
+  alerts cost about 2.5 times as many SMS as English in this demo.
 - For Ghana there is no radar to train on. The model would have to be trained elsewhere (OpenMRG) or on GMet gauges,
   and its transfer to tropical rain and a different network is untested.
 - The nowcast moves the whole map with one motion vector and keeps rain intensity fixed: no growth, decay or new cells,

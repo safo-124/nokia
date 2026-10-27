@@ -8,6 +8,8 @@
   --ink-2: #52514e;
   --muted: #898781;
   --border: rgba(11, 11, 11, 0.1);
+  --phone-screen: #ffffff;
+  --bubble: #e9e9eb;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,6 +21,8 @@
     --ink-2: #c3c2b7;
     --muted: #898781;
     --border: rgba(255, 255, 255, 0.1);
+    --phone-screen: #000000;
+    --bubble: #262628;
   }
 }
 
@@ -30,6 +34,38 @@
   --ink-2: #c3c2b7;
   --muted: #898781;
   --border: rgba(255, 255, 255, 0.1);
+  --phone-screen: #000000;
+  --bubble: #262628;
+}
+
+/* New SMS slides in; the banner drops down from the top of the phone */
+@keyframes sms-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes sms-banner {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+.sms-in {
+  animation: sms-in 300ms ease-out;
+}
+
+.sms-banner {
+  animation: sms-banner 250ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sms-in,
+  .sms-banner {
+    animation: none;
+  }
 }
 
 body {

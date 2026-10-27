@@ -4,8 +4,10 @@ import { api } from "./api";
 import { usePrefersDark } from "./colors";
 import AlertPanel from "./components/AlertPanel";
 import GaugeChart from "./components/GaugeChart";
+import PhoneMockup from "./components/PhoneMockup";
 import RainMap from "./components/RainMap";
 import ReplayControls from "./components/ReplayControls";
+import type { Language } from "./sms";
 import type {
   Alert,
   DatasetSummary,
@@ -155,6 +157,8 @@ export default function App() {
   const [lead, setLead] = useState<Lead>(0);
   const [frame, setFrame] = useState<Frame>({});
   const [selectedGauge, setSelectedGauge] = useState<string | null>(null);
+  const [phoneHotspot, setPhoneHotspot] = useState<string | null>(null);
+  const [smsLang, setSmsLang] = useState<Language>("en");
 
   const dataset = useMemo(() => (datasetId ? api.dataset(datasetId) : null), [datasetId]);
 
@@ -185,6 +189,8 @@ export default function App() {
       if (cancelled) return;
       setLayers({ meta, links, gauges, hotspots, alerts });
       setSelectedGauge(gauges.features[0]?.properties.id ?? null);
+      // Start the phone in the neighbourhood that is warned first
+      setPhoneHotspot(alerts[0]?.hotspot_id ?? hotspots?.features[0]?.properties.id ?? null);
     })().catch((e: Error) => !cancelled && setError(e.message));
     return () => {
       cancelled = true;
@@ -266,6 +272,8 @@ export default function App() {
               risk={frame.risk}
               selectedGauge={selectedGauge}
               onSelectGauge={setSelectedGauge}
+              selectedHotspot={phoneHotspot}
+              onSelectHotspot={setPhoneHotspot}
               dark={dark}
             />
           </div>
@@ -281,6 +289,19 @@ export default function App() {
         </main>
 
         <aside className="w-full overflow-y-auto border-l border-[var(--border)] bg-[var(--surface)] lg:w-96">
+          {layers.hotspots && phoneHotspot && (
+            <Section title="What a resident receives (SMS)">
+              <PhoneMockup
+                alerts={layers.alerts}
+                hotspots={layers.hotspots}
+                hotspotId={phoneHotspot}
+                onHotspot={setPhoneHotspot}
+                currentTime={currentTime}
+                lang={smsLang}
+                onLang={setSmsLang}
+              />
+            </Section>
+          )}
           <Section title={`Alerts (${issued})`}>
             <AlertPanel alerts={layers.alerts} currentTime={currentTime} hasFloodRisk={meta.has_flood_risk} />
           </Section>
